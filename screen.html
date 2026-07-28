@@ -8,8 +8,8 @@
     <h2 class="text-3xl font-bold text-white mb-2">Import Tab</h2>
     <p class="text-gray-500 mb-2">Convert a Guitar Pro file into a playable feedpak, keeping as much of the original chart as possible.</p>
     <p class="text-xs text-gray-600 mb-8">
-        Supports .gp3, .gp4, and .gp5 today, with synthesized audio and section/beat timeline data.
-        GP6/GP7/GP8 support is coming in a later update.
+        Supports .gp3-.gp5 (synthesized audio) and .gp6/.gp/.gpx (embedded or synced audio),
+        with section/beat timeline data and lyrics where the source has them.
     </p>
 
     <!-- Drop zone. #fpr-file-input is a stable sibling never touched by the
@@ -22,7 +22,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/>
             </svg>
             <p class="text-gray-400 text-sm mb-2">Drag and drop a Guitar Pro file here</p>
-            <p class="text-gray-600 text-xs">or click to browse &nbsp;·&nbsp; .gp3 .gp4 .gp5</p>
+            <p class="text-gray-600 text-xs">or click to browse &nbsp;·&nbsp; .gp3 .gp4 .gp5 .gp6 .gpx .gp</p>
         </div>
         <input type="file" id="fpr-file-input" accept=".gp3,.gp4,.gp5,.gpx,.gp" class="hidden">
     </div>
@@ -54,10 +54,43 @@
             <div id="fpr-tracks"></div>
         </div>
 
-        <label class="flex items-center gap-2 mb-2 text-xs text-gray-400 cursor-pointer select-none">
-            <input type="checkbox" id="fpr-include-audio" checked class="accent-blue-500">
-            Generate audio (synthesized with FluidSynth)
-        </label>
+        <div class="bg-dark-700 border border-gray-800 rounded-xl p-5 mb-4">
+            <p class="text-xs text-gray-400 mb-3">Audio</p>
+            <div id="fpr-audio-modes" class="flex flex-col gap-2 mb-3">
+                <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none" data-audio-mode-row="midi">
+                    <input type="radio" name="fpr-audio-mode" value="midi" checked class="accent-blue-500">
+                    Synthesize with FluidSynth (.gp3-.gp5 only)
+                </label>
+                <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none" data-audio-mode-row="embedded">
+                    <input type="radio" name="fpr-audio-mode" value="embedded" class="accent-blue-500">
+                    Use the file's embedded backing track
+                </label>
+                <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none" data-audio-mode-row="sync">
+                    <input type="radio" name="fpr-audio-mode" value="sync" class="accent-blue-500">
+                    Sync to a recording (upload a file or fetch from YouTube)
+                </label>
+                <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none" data-audio-mode-row="none">
+                    <input type="radio" name="fpr-audio-mode" value="none" class="accent-blue-500">
+                    No audio (add stems later)
+                </label>
+            </div>
+
+            <div id="fpr-sync-controls" class="hidden pl-6 border-l border-gray-800">
+                <div class="flex gap-2 mb-2">
+                    <input type="file" id="fpr-audio-file-input" accept=".mp3,.wav,.ogg,.flac,.m4a,.aac"
+                        class="text-xs text-gray-400 flex-1">
+                </div>
+                <div class="flex gap-2 mb-2">
+                    <input type="text" id="fpr-youtube-url" placeholder="or paste a YouTube URL"
+                        class="flex-1 bg-dark-600 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-200 outline-none focus:border-accent/50">
+                    <button onclick="fprFetchYoutube()"
+                        class="px-3 py-1.5 rounded-lg text-xs text-gray-300 bg-dark-600 hover:bg-dark-500 transition">
+                        Fetch
+                    </button>
+                </div>
+                <div id="fpr-sync-status" class="text-xs text-gray-500"></div>
+            </div>
+        </div>
         <div class="mb-4">
             <label class="text-xs text-gray-400 mb-1 block">Cover art (optional)</label>
             <input type="file" id="fpr-cover-input" accept=".jpg,.jpeg,.png,.webp"
