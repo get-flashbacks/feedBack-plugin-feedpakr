@@ -29,10 +29,17 @@ for the pattern this is deliberately consistent with):
     Builds a .feedpak from the uploaded GP file, streaming progress
     messages, then writes it into the DLC folder and indexes it.
 
-Phase 2 scope: GP3-GP8 (see feedpakr_pipeline.py), MIDI/embedded/synced
-audio, and lyrics extraction. The sloppak-upgrade batch flow and
-post-import handoffs to the song-preview / stem-splitter plugins land in
-later phases.
+  GET  /api/plugins/feedpakr/sloppaks
+    Lists every .sloppak under the DLC folder, for the Upgrade Library tab.
+
+  WS   /ws/plugins/feedpakr/upgrade
+    Batch-converts selected .sloppak files to .feedpak, streaming
+    per-file progress. Originals are never modified or deleted.
+
+Post-import handoffs to the song-preview / stem-splitter plugins (when
+installed) are done entirely client-side in screen.js — both plugins
+expose their own same-origin REST endpoints, so there is nothing for
+this module to proxy.
 """
 
 from __future__ import annotations
@@ -55,6 +62,7 @@ _log = None
 _pipeline = None
 _pack = None
 _audio = None
+_upgrade = None
 
 # GP files are binary (zip-compressed for .gpx/.gp, raw for .gp3/4/5) and
 # can run larger than a MusicXML score — 30 MB comfortably covers real-world
@@ -102,7 +110,7 @@ def _decode_upload(data: dict, *, max_bytes: int, allowed_exts: set[str] | None 
 
 
 def setup(app, context):
-    global _get_dlc_dir, _extract_meta, _meta_db, _log, _pipeline, _pack, _audio
+    global _get_dlc_dir, _extract_meta, _meta_db, _log, _pipeline, _pack, _audio, _upgrade
     _get_dlc_dir = context['get_dlc_dir']
     _extract_meta = context['extract_meta']
     _meta_db = context['meta_db']
@@ -110,6 +118,7 @@ def setup(app, context):
     _pipeline = context['load_sibling']('feedpakr_pipeline')
     _pack = context['load_sibling']('feedpakr_pack')
     _audio = context['load_sibling']('feedpakr_audio')
+    _upgrade = context['load_sibling']('feedpakr_upgrade')
 
     @app.post('/api/plugins/feedpakr/upload')
     async def upload_gp(data: dict):
@@ -329,9 +338,9 @@ def setup(app, context):
                 out_dir = Path(dlc) / 'feedpakr'
                 out_path = _pack.unique_output_path(out_dir, base_name)
                 out_path.write_bytes(result['bytes'])
+                rel_name = (Path('feedpakr') / out_path.name).as_posix()
 
                 try:
-                    rel_name = str(Path('feedpakr') / out_path.name)
                     meta = _extract_meta(out_path)
                     stat = out_path.stat()
                     _meta_db.put(rel_name, stat.st_mtime, stat.st_size, meta)
@@ -343,6 +352,7 @@ def setup(app, context):
                     'progress': 100,
                     'stage': 'Complete!',
                     'filename': out_path.name,
+                    'filename_rel': rel_name,
                     'arrangement_count': result['arrangement_count'],
                     'duration': result['duration'],
                     'warnings': result['warnings'],
@@ -369,6 +379,123 @@ def setup(app, context):
                         break
                 except asyncio.TimeoutError:
                     if build_task.done():
+                        break
+        except WebSocketDisconnect:
+            pass
+
+        await websocket.close()
+
+    @app.get('/api/plugins/feedpakr/sloppaks')
+    async def list_sloppaks():
+        """List every .sloppak under the DLC folder for the Upgrade Library tab."""
+        dlc = _get_dlc_dir()
+        if not dlc:
+            return {'error': 'DLC folder not configured'}
+
+        def _scan():
+            dlc_root = Path(dlc)
+            entries = []
+            for p in dlc_root.rglob('*.sloppak'):
+                if not p.is_file():
+                    continue
+                rel = p.relative_to(dlc_root).as_posix()
+                title, artist = '', ''
+                try:
+                    manifest = _upgrade.sloppak_mod.load_manifest(p) if _upgrade.sloppak_mod else None
+                    if manifest:
+                        title = manifest.get('title', '')
+                        artist = manifest.get('artist', '')
+                except Exception:
+                    pass
+                already = p.with_suffix('.feedpak').exists()
+                entries.append({
+                    'path': rel, 'title': title, 'artist': artist,
+                    'already_upgraded': already,
+                })
+            entries.sort(key=lambda e: (e['title'] or e['path']).lower())
+            return entries
+
+        loop = asyncio.get_running_loop()
+        entries = await loop.run_in_executor(None, _scan)
+        return {'sloppaks': entries}
+
+    @app.websocket('/ws/plugins/feedpakr/upgrade')
+    async def ws_upgrade(websocket: WebSocket, paths: str = ''):
+        """Batch-convert selected .sloppak files (comma-separated,
+        DLC-relative) to .feedpak. Originals are never touched."""
+        await websocket.accept()
+
+        dlc = _get_dlc_dir()
+        if not dlc:
+            await websocket.send_json({'error': 'DLC folder not configured'})
+            await websocket.close()
+            return
+
+        rel_paths = [p for p in paths.split(',') if p.strip()]
+        if not rel_paths:
+            await websocket.send_json({'error': 'No files selected'})
+            await websocket.close()
+            return
+
+        progress_queue: asyncio.Queue = asyncio.Queue()
+
+        def _do_upgrade():
+            results = []
+            dlc_root = Path(dlc)
+            for i, rel in enumerate(rel_paths):
+                progress_queue.put_nowait({
+                    'stage': f'Upgrading {rel}…',
+                    'progress': int(i / len(rel_paths) * 100),
+                    'current': rel,
+                })
+                src_path = (dlc_root / rel).resolve()
+                try:
+                    src_path.relative_to(dlc_root.resolve())
+                except ValueError:
+                    results.append({'path': rel, 'error': 'Path escapes the DLC folder'})
+                    continue
+                if not src_path.is_file():
+                    results.append({'path': rel, 'error': 'File no longer exists'})
+                    continue
+
+                try:
+                    result = _upgrade.upgrade_sloppak(str(src_path))
+                    out_path = _pack.unique_output_path(
+                        src_path.parent, src_path.stem, ext='.feedpak',
+                    )
+                    out_path.write_bytes(result['bytes'])
+                    rel_out = out_path.relative_to(dlc_root).as_posix()
+                    try:
+                        meta = _extract_meta(out_path)
+                        stat = out_path.stat()
+                        _meta_db.put(rel_out, stat.st_mtime, stat.st_size, meta)
+                    except Exception:
+                        _log.warning('feedpakr: metadata indexing failed for %r', out_path.name, exc_info=True)
+                    results.append({
+                        'path': rel,
+                        'output': out_path.name,
+                        'output_rel': rel_out,
+                        'warnings': result['warnings'],
+                        'valid': not result['validation'],
+                    })
+                except Exception as e:
+                    _log.exception('feedpakr: upgrade failed for %r', rel)
+                    results.append({'path': rel, 'error': str(e)})
+
+            progress_queue.put_nowait({'done': True, 'progress': 100, 'results': results})
+
+        loop = asyncio.get_running_loop()
+        upgrade_task = loop.run_in_executor(None, _do_upgrade)
+
+        try:
+            while True:
+                try:
+                    msg = await asyncio.wait_for(progress_queue.get(), timeout=1.0)
+                    await websocket.send_json(msg)
+                    if msg.get('done') or msg.get('error'):
+                        break
+                except asyncio.TimeoutError:
+                    if upgrade_task.done():
                         break
         except WebSocketDisconnect:
             pass

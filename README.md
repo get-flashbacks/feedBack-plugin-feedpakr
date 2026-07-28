@@ -1,12 +1,12 @@
 # feedpakr
 
 A [feedBack](https://github.com/got-feedBack/feedBack) plugin that imports Guitar Pro
-files into `.feedpak` at maximum fidelity, and (in a later phase) upgrades existing
-`.sloppak` files to `.feedpak`.
+files into `.feedpak` at maximum fidelity, and batch-upgrades existing `.sloppak`
+libraries to `.feedpak`.
 
 Plugin id: `feedpakr`. Install into `plugins/feedpakr/` (folder name must match the id).
 
-## Status: Phase 3 (max fidelity)
+## Status: Phase 4 (feature-complete for v1)
 
 - Upload a `.gp3`-`.gp5` (pyguitarpro) or `.gp6`/`.gpx`/`.gp` (GPIF, GP6-GP8) file, pick
   which tracks to include and name their arrangements, attach cover art.
@@ -37,8 +37,37 @@ Plugin id: `feedpakr`. Install into `plugins/feedpakr/` (folder name must match 
 | Repeats/D.S./D.C./Coda | **Fixed** (GP3-5), **known limitation** (GPIF) | gp2rs already expands these; gp2rs_gpx doesn't yet (host TODO) — feedpakr detects repeat/volta markup up front and warns rather than silently shipping drifted timing |
 | Rigs/gear chains, harmony | Out of scope | GP carries no rig/signal-chain data; harmony (chord *intent* vs. what's played) needs separate work |
 
-**Not yet implemented**: the `.sloppak` → `.feedpak` batch upgrade tab, and handoffs to
-the `song-preview` / `stem-splitter` plugins (Phase 4).
+### Upgrade Library tab
+
+Batch-converts existing `.sloppak` files to `.feedpak` without touching the originals.
+Verified against every sample sloppak this project has (21 real packs spanning a
+GP-import pipeline, CDLC-derived packs, and minimal tutorial packs): **21/21 upgrade to
+a fully spec-valid `.feedpak`**. Per file, the upgrade:
+
+- Promotes arrangement-embedded `beats`/`sections` (the shape most existing packs
+  actually use) into a proper `song_timeline.json` side file — accepting both the `time`
+  and `start_time` section-key variants seen in the wild, and never overwriting a
+  `song_timeline.json` that's already genuinely there.
+- Ensures `stems[]` has an `id: full` entry: promotes the deprecated `original_audio`
+  key when present, or renames a pack's *only* stem to `full` when it isn't separated
+  (a single unseparated mix *is* the complete mix, whatever id an older tool gave it).
+  A pack with multiple separated stems and no full mix is left alone and reported
+  honestly — nothing is fabricated.
+- Normalizes non-spec `lyrics_source` values this ecosystem's own earlier tools wrote:
+  `xml` and `sng` both meant "authored" (chart/CDLC-sourced, not machine-transcribed);
+  an engine name written directly (e.g. `whisperx`) is corrected to `transcribed` when a
+  `lyric_transcription` block already names that engine properly. An unrecognized value
+  with nothing to infer from is left alone and reported, never guessed at.
+- Preserves every other file and every other manifest key byte-for-byte (spec §9) —
+  an upgrade pass only adds data, never removes or reinterprets what's already there.
+
+### Handoffs to song-preview / stem-splitter
+
+After a successful import or upgrade, the result panel offers **Generate Preview** and
+**Split Stems** buttons when those plugins are installed (probed via their own REST
+endpoints — feedpakr never generates a preview or splits stems itself, it only calls
+the dedicated plugins that own those features). Buttons for a plugin that isn't
+installed simply don't appear.
 
 ## Why
 
@@ -50,8 +79,8 @@ put it there, without needing any changes to the feedBack core.
 ## Architecture
 
 - `routes.py` — thin FastAPI routes (upload / upload-cover / upload-audio /
-  youtube-audio / autosync-preview / `WS build`), following the upload-token /
-  streaming-build pattern used by `feedBack-plugin-musicxml-import`.
+  youtube-audio / autosync-preview / `WS build` / `sloppaks` / `WS upgrade`), following
+  the upload-token / streaming-build pattern used by `feedBack-plugin-musicxml-import`.
 - `feedpakr_pipeline.py` — orchestrates parsing, conversion (via the host's `gp2rs` /
   `gp2rs_gpx` / `song`), and all fidelity enrichment (capo, timeline, lyrics, keys,
   tones, handshapes, drums-as-arrangements, notation, vocal pitch).
@@ -64,11 +93,18 @@ put it there, without needing any changes to the feedBack core.
 - `feedpakr_keys.py` — key/scale extraction (`keys.json`) for both source families.
 - `feedpakr_handshapes.py` — hand-shape derivation from chord data.
 - `feedpakr_notation.py` — GPIF keys/piano track notation sidecars.
+- `feedpakr_upgrade.py` — the `.sloppak` → `.feedpak` batch upgrade path (see above).
+  Reads via the host's `sloppak.load_manifest`/`read_member_bytes` when available, with a
+  small standalone YAML/zip fallback so its tests don't require the host lib either.
 - `feedpakr_pack.py` — manifest assembly and `.feedpak` zip writing. Pure dicts, no
   pyguitarpro dependency — easy to unit test.
 - `feedpakr_validate.py` — validates every payload shape (manifest, arrangement,
   song_timeline, keys, vocal_pitch, drum_tab, notation) against the vendored feedpak-spec
   schemas, always returning a report rather than raising.
+
+Handoffs to `song-preview`/`stem-splitter` live entirely in `screen.js` (`fprProbeHandoffs`
+/ `fprRunHandoff`) — both plugins expose same-origin REST endpoints, so there's nothing
+for the backend to proxy.
 
 `routes.py` loads its siblings via `context['load_sibling']` (not bare imports) to avoid
 the plugin-module-name collisions that mechanism exists to prevent.
@@ -126,6 +162,8 @@ regression tests, all against real sample files:
   `test_build_feedpak_gpif_keys_track_gets_notation`,
   `test_build_feedpak_gpif_vocal_track_produces_vocal_pitch` — Phase 3 fidelity features,
   each checked against real converted output, not just unit-level logic.
+- `tests/test_upgrade.py::test_real_fixture_batch_all_fully_valid` — every sample
+  `.sloppak` this project has upgrades to a fully spec-valid `.feedpak` (21/21).
 
 ## License
 

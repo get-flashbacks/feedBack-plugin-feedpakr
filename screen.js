@@ -18,6 +18,9 @@ let _buildDone = false;
 let _format = 'gp345';
 let _hasEmbeddedAudio = false;
 let _audioAttached = false;
+let _sloppaks = [];
+let _upgradeDone = false;
+let _handoffAvailability = { preview: null, split: null };
 
 function esc(s) {
     return String(s)
@@ -345,6 +348,87 @@ async function fprBuild() {
     };
 }
 
+// ── Handoffs to song-preview / stem-splitter (when installed) ──────────────
+// Both plugins expose their own same-origin REST endpoints — this only
+// probes for their presence and calls them; feedpakr never generates a
+// preview or splits stems itself.
+
+async function fprProbeHandoffs() {
+    if (_handoffAvailability.preview === null) {
+        try {
+            const r = await fetch('/api/plugins/song_preview/audit');
+            _handoffAvailability.preview = r.ok;
+        } catch (err) { _handoffAvailability.preview = false; }
+    }
+    if (_handoffAvailability.split === null) {
+        try {
+            const r = await fetch('/api/plugins/stem_splitter/jobs');
+            _handoffAvailability.split = r.ok;
+        } catch (err) { _handoffAvailability.split = false; }
+    }
+}
+
+function fprHandoffButtonsHtml(relPath) {
+    if (!relPath) return '';
+    return `<div class="flex items-center gap-2 mt-2" data-handoff-for="${esc(relPath)}">
+        <button data-handoff="preview" data-handoff-path="${esc(relPath)}"
+            class="hidden px-3 py-1 rounded-lg text-xs text-gray-300 bg-dark-600 hover:bg-dark-500 transition">
+            Generate Preview
+        </button>
+        <button data-handoff="split" data-handoff-path="${esc(relPath)}"
+            class="hidden px-3 py-1 rounded-lg text-xs text-gray-300 bg-dark-600 hover:bg-dark-500 transition">
+            Split Stems
+        </button>
+        <span data-handoff-status class="text-xs text-gray-500"></span>
+    </div>`;
+}
+
+async function fprWireHandoffButtons(container) {
+    await fprProbeHandoffs();
+    container.querySelectorAll('[data-handoff="preview"]').forEach((btn) => {
+        if (!_handoffAvailability.preview) return;
+        btn.classList.remove('hidden');
+        btn.addEventListener('click', () => fprRunHandoff(btn, 'preview'));
+    });
+    container.querySelectorAll('[data-handoff="split"]').forEach((btn) => {
+        if (!_handoffAvailability.split) return;
+        btn.classList.remove('hidden');
+        btn.addEventListener('click', () => fprRunHandoff(btn, 'split'));
+    });
+}
+
+async function fprRunHandoff(btn, kind) {
+    const relPath = btn.getAttribute('data-handoff-path');
+    const statusEl = btn.parentElement.querySelector('[data-handoff-status]');
+    btn.disabled = true;
+    if (statusEl) statusEl.textContent = kind === 'preview' ? 'Generating preview…' : 'Requesting stem split…';
+
+    try {
+        const resp = kind === 'preview'
+            ? await fetch(`/api/plugins/song_preview/backfill?file=${encodeURIComponent(relPath)}`, { method: 'POST' })
+            : await fetch('/api/plugins/stem_splitter/split', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename: relPath }),
+            });
+        const data = await resp.json();
+        if (data.error || data.ok === false) {
+            if (statusEl) statusEl.textContent = data.error || "Needs setup — check the plugin's Settings page.";
+            btn.disabled = false;
+        } else {
+            if (statusEl) {
+                statusEl.textContent = kind === 'preview'
+                    ? 'Preview generated.'
+                    : `Stem split queued (${data.enqueued || 1} job).`;
+            }
+            btn.classList.add('hidden');
+        }
+    } catch (err) {
+        if (statusEl) statusEl.textContent = `Failed: ${String(err)}`;
+        btn.disabled = false;
+    }
+}
+
 function fprShowResult(msg) {
     document.getElementById('fpr-progress').classList.add('hidden');
     document.getElementById('fpr-result').classList.remove('hidden');
@@ -390,11 +474,14 @@ function fprShowResult(msg) {
             <p class="mt-2">${validityBadge}</p>
             ${featuresHtml}
             ${warningsHtml}
+            ${fprHandoffButtonsHtml(msg.filename_rel)}
             <button onclick="fprReset()"
                 class="mt-4 px-4 py-2 bg-dark-600 hover:bg-dark-500 rounded-xl text-sm text-gray-300 transition">
                 Import Another
             </button>
         </div>`;
+
+    fprWireHandoffButtons(document.getElementById('fpr-result'));
 }
 
 function fprShowError(message) {
@@ -452,9 +539,161 @@ function fprReset() {
         <p class="text-gray-600 text-xs">or click to browse &nbsp;·&nbsp; .gp3 .gp4 .gp5 .gp6 .gpx .gp</p>`;
 }
 
+// ── Tabs ─────────────────────────────────────────────────────────────────
+
+function fprShowTab(tab) {
+    document.getElementById('fpr-tab-import').classList.toggle('hidden', tab !== 'import');
+    document.getElementById('fpr-tab-upgrade').classList.toggle('hidden', tab !== 'upgrade');
+    document.querySelectorAll('[data-tab-button]').forEach((btn) => {
+        const active = btn.getAttribute('data-tab-button') === tab;
+        btn.classList.toggle('border-accent', active);
+        btn.classList.toggle('text-white', active);
+        btn.classList.toggle('border-transparent', !active);
+        btn.classList.toggle('text-gray-500', !active);
+    });
+    if (tab === 'upgrade' && !_sloppaks.length) fprRefreshSloppaks();
+}
+
+// ── Upgrade Library ──────────────────────────────────────────────────────
+
+async function fprRefreshSloppaks() {
+    const list = document.getElementById('fpr-sloppak-list');
+    list.innerHTML = '<p class="text-xs text-gray-600">Loading…</p>';
+    try {
+        const resp = await fetch(`${API_BASE}/sloppaks`);
+        const data = await resp.json();
+        if (data.error) {
+            list.innerHTML = `<p class="text-xs text-red-400">${esc(data.error)}</p>`;
+            return;
+        }
+        _sloppaks = data.sloppaks || [];
+        if (!_sloppaks.length) {
+            list.innerHTML = '<p class="text-xs text-gray-600">No .sloppak files found under the DLC folder.</p>';
+            return;
+        }
+        list.innerHTML = _sloppaks.map((s) => `
+            <div class="flex items-center gap-3 py-2 border-b border-gray-800 last:border-0">
+                <input type="checkbox" data-sloppak-check="${esc(s.path)}" class="accent-blue-500 shrink-0"
+                    ${s.already_upgraded ? '' : 'checked'}>
+                <span class="text-sm text-gray-300 flex-1 truncate">
+                    ${esc(s.title || s.path)}${s.artist ? ' — ' + esc(s.artist) : ''}
+                </span>
+                <span class="text-xs text-gray-600 shrink-0 truncate" style="max-width:16rem">${esc(s.path)}</span>
+                ${s.already_upgraded ? '<span class="text-xs text-green-400 shrink-0">already upgraded</span>' : ''}
+            </div>`).join('');
+    } catch (err) {
+        list.innerHTML = `<p class="text-xs text-red-400">Failed to load: ${esc(String(err))}</p>`;
+    }
+}
+
+function fprSelectAllSloppaks(state) {
+    document.querySelectorAll('[data-sloppak-check]').forEach((cb) => { cb.checked = state; });
+}
+
+async function fprUpgradeSelected() {
+    const paths = Array.from(document.querySelectorAll('[data-sloppak-check]'))
+        .filter((cb) => cb.checked)
+        .map((cb) => cb.getAttribute('data-sloppak-check'));
+    if (!paths.length) {
+        alert('Select at least one file to upgrade.');
+        return;
+    }
+
+    document.getElementById('fpr-upgrade-progress').classList.remove('hidden');
+    document.getElementById('fpr-upgrade-result').classList.add('hidden');
+    document.getElementById('fpr-upgrade-bar').style.width = '0%';
+    document.getElementById('fpr-upgrade-stage').textContent = 'Starting…';
+
+    _upgradeDone = false;
+    const params = new URLSearchParams({ paths: paths.join(',') });
+    const ws = new WebSocket(`${WS_BASE}/upgrade?${params}`);
+
+    ws.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        if (msg.progress !== undefined)
+            document.getElementById('fpr-upgrade-bar').style.width = msg.progress + '%';
+        if (msg.stage)
+            document.getElementById('fpr-upgrade-stage').textContent = msg.stage;
+
+        if (msg.done) {
+            _upgradeDone = true;
+            fprShowUpgradeResults(msg.results || []);
+        }
+        if (msg.error) {
+            _upgradeDone = true;
+            document.getElementById('fpr-upgrade-progress').classList.add('hidden');
+            document.getElementById('fpr-upgrade-result').classList.remove('hidden');
+            document.getElementById('fpr-upgrade-result').innerHTML =
+                `<p class="text-red-400 text-sm">${esc(msg.error)}</p>`;
+        }
+    };
+
+    ws.onerror = () => {
+        if (_upgradeDone) return;
+        _upgradeDone = true;
+        document.getElementById('fpr-upgrade-progress').classList.add('hidden');
+        document.getElementById('fpr-upgrade-result').classList.remove('hidden');
+        document.getElementById('fpr-upgrade-result').innerHTML =
+            '<p class="text-red-400 text-sm">Connection error.</p>';
+    };
+
+    // Same rationale as the import build's ws.onclose: a clean server-side
+    // close with no done/error frame would otherwise leave the bar stuck.
+    ws.onclose = () => {
+        if (_upgradeDone) return;
+        _upgradeDone = true;
+        document.getElementById('fpr-upgrade-progress').classList.add('hidden');
+        document.getElementById('fpr-upgrade-result').classList.remove('hidden');
+        document.getElementById('fpr-upgrade-result').innerHTML =
+            '<p class="text-red-400 text-sm">Connection closed unexpectedly before the upgrade finished.</p>';
+    };
+}
+
+function fprShowUpgradeResults(results) {
+    document.getElementById('fpr-upgrade-progress').classList.add('hidden');
+    document.getElementById('fpr-upgrade-result').classList.remove('hidden');
+
+    const rows = results.map((r) => {
+        if (r.error) {
+            return `<div class="py-2 border-b border-gray-800 last:border-0">
+                <p class="text-sm text-gray-300">${esc(r.path)}</p>
+                <p class="text-xs text-red-400">${esc(r.error)}</p>
+            </div>`;
+        }
+        const badge = r.valid
+            ? '<span class="text-green-400 text-xs">✓ valid</span>'
+            : '<span class="text-amber-400/80 text-xs">⚠ issues</span>';
+        const warns = (r.warnings || []).length
+            ? `<ul class="text-xs text-gray-500 list-disc list-inside space-y-0.5 mt-1">
+                   ${r.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}
+               </ul>`
+            : '';
+        return `<div class="py-2 border-b border-gray-800 last:border-0">
+            <p class="text-sm text-gray-300">${esc(r.output)} ${badge}</p>
+            ${warns}
+            ${fprHandoffButtonsHtml(r.output_rel)}
+        </div>`;
+    }).join('');
+
+    document.getElementById('fpr-upgrade-result').innerHTML = `
+        <div class="bg-dark-700 border border-gray-800 rounded-xl p-4">
+            ${rows}
+        </div>
+        <button onclick="fprRefreshSloppaks()"
+            class="mt-4 px-4 py-2 bg-dark-600 hover:bg-dark-500 rounded-xl text-sm text-gray-300 transition">
+            Refresh List
+        </button>`;
+
+    fprWireHandoffButtons(document.getElementById('fpr-upgrade-result'));
+}
+
 // Expose handlers globally so onclick= in screen.html works
 window.fprBuild = fprBuild;
 window.fprReset = fprReset;
 window.fprFetchYoutube = fprFetchYoutube;
+window.fprShowTab = fprShowTab;
+window.fprRefreshSloppaks = fprRefreshSloppaks;
+window.fprSelectAllSloppaks = fprSelectAllSloppaks;
+window.fprUpgradeSelected = fprUpgradeSelected;
 
 })();
