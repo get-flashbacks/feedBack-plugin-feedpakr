@@ -1,0 +1,3 @@
+# pyguitarpro, PyYAML, and yt-dlp already ship with the feedBack host
+# (see feedBack/requirements.txt) and are not re-declared here.
+jsonschema>=4.20,<5
