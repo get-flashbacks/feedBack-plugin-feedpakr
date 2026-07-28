@@ -53,6 +53,31 @@ def parse_vocals_xml(xml_path: str) -> list[dict]:
     return entries
 
 
+def parse_vocal_pitch_xml(xml_path: str) -> dict | None:
+    """Extract vocal_pitch.json (spec §7.2) from the same `<vocals>` XML
+    parse_vocals_xml reads — each `<vocal>` element already carries the
+    sung MIDI pitch as its `note` attribute, so this needs no separate
+    call into gp2rs_gpx's private per-syllable pitch sidecar function.
+    `note="0"` marks a lyric-only rest (no real pitch, see convert_file's
+    docstring) and is excluded, not zero-mapped."""
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+    notes = []
+    for v in root.findall('vocal'):
+        try:
+            midi = int(v.get('note', 0))
+        except ValueError:
+            continue
+        if midi <= 0:
+            continue
+        notes.append({
+            't': float(v.get('time', 0)),
+            'd': float(v.get('length', 0)),
+            'midi': midi,
+        })
+    return {'version': 1, 'notes': notes} if notes else None
+
+
 _SYLLABLE_SPLIT = re.compile(r'\s+')
 
 

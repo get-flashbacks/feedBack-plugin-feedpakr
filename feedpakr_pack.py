@@ -68,6 +68,8 @@ def assemble_manifest(
     stem_file: str | None,
     song_timeline_present: bool = False,
     lyrics_present: bool = False,
+    keys_present: bool = False,
+    vocal_pitch_present: bool = False,
 ) -> dict:
     """Build the manifest.yaml dict. Only emits keys feedpakr actually fills.
 
@@ -103,6 +105,10 @@ def assemble_manifest(
     if lyrics_present:
         manifest['lyrics'] = 'lyrics.json'
         manifest['lyrics_source'] = 'authored'
+    if keys_present:
+        manifest['keys'] = 'keys.json'
+    if vocal_pitch_present:
+        manifest['vocal_pitch'] = 'vocal_pitch.json'
 
     return manifest
 
@@ -113,13 +119,21 @@ def write_feedpak_zip(
     arrangement_files: dict[str, dict],
     song_timeline: dict | None = None,
     lyrics: list | None = None,
+    keys: dict | None = None,
+    vocal_pitch: dict | None = None,
+    drum_tab_files: dict[str, dict] | None = None,
+    notation_files: dict[str, dict] | None = None,
     audio_path: str | Path | None = None,
     cover_path: str | Path | None = None,
 ) -> bytes:
     """Assemble a .feedpak zip in memory and return its bytes.
 
     arrangement_files maps the manifest-relative filename (e.g.
-    "lead.json") to its wire-format payload dict.
+    "lead.json") to its wire-format payload dict. drum_tab_files and
+    notation_files are the same shape but written at the package root
+    (spec §7 side files, not under arrangements/) — their filenames must
+    already match what the corresponding arrangement entry's `drum_tab`
+    / `notation` pointer says.
     """
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -132,6 +146,10 @@ def write_feedpak_zip(
                 f'arrangements/{filename}',
                 json.dumps(payload, separators=(',', ':')),
             )
+        for filename, payload in (drum_tab_files or {}).items():
+            zf.writestr(filename, json.dumps(payload, separators=(',', ':')))
+        for filename, payload in (notation_files or {}).items():
+            zf.writestr(filename, json.dumps(payload, separators=(',', ':')))
         if song_timeline is not None:
             zf.writestr(
                 'song_timeline.json',
@@ -139,6 +157,10 @@ def write_feedpak_zip(
             )
         if lyrics is not None:
             zf.writestr('lyrics.json', json.dumps(lyrics, separators=(',', ':')))
+        if keys is not None:
+            zf.writestr('keys.json', json.dumps(keys, separators=(',', ':')))
+        if vocal_pitch is not None:
+            zf.writestr('vocal_pitch.json', json.dumps(vocal_pitch, separators=(',', ':')))
         if audio_path and Path(audio_path).exists():
             stem_ext = Path(audio_path).suffix.lower() or '.ogg'
             zf.write(audio_path, f'stems/full{stem_ext}')

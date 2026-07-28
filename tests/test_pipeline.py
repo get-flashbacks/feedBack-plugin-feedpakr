@@ -164,3 +164,123 @@ def test_gpif_capo_lookup_reads_capo_fret():
         pytest.skip('capo sample fixture not present on this machine')
     capo = pipeline._gpif_capo_lookup(str(capo_path))
     assert capo.get(6) == 2
+
+
+# ── Phase 3 fidelity: keys.json, handshapes, drums-as-arrangements,
+#    notation, vocal_pitch ─────────────────────────────────────────────────
+
+@fixture_available
+def test_build_feedpak_gp345_drums_become_type_drums_arrangement():
+    """A GP3-5 drum track gets a real drum_tab.json + `type: drums` entry
+    (spec 1.17.0) instead of the legacy string*24+fret fretted encoding —
+    gp2rs_gpx has no equivalent, so this is GP3-5 only."""
+    result = pipeline.build_feedpak(
+        str(MONEY_GP5),
+        track_indices=[1, 6],  # Rhythm guitar, Drums
+        arrangement_names={1: 'Rhythm', 6: 'Drums'},
+        audio_mode='none',
+        report=lambda stage, pct: None,
+    )
+    assert result['arrangement_count'] == 2
+
+    import io
+    import json
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
+        names = zf.namelist()
+        manifest = yaml.safe_load(zf.read('manifest.yaml'))
+        drums_entry = next(a for a in manifest['arrangements'] if a['name'] == 'Drums')
+        assert drums_entry['type'] == 'drums'
+        assert 'file' not in drums_entry
+        drum_tab = json.loads(zf.read(drums_entry['drum_tab']))
+
+    assert drum_tab['hits']  # real hit data, not empty
+    assert drum_tab['kit']
+
+
+@fixture_available
+def test_build_feedpak_handshapes_derived_from_chords():
+    """gp2rs never populates handShapes ('empty for now') — feedpakr derives
+    them from the chord data every source has. Money's rhythm guitar has
+    real chord hits, so this should produce a non-empty list."""
+    result = pipeline.build_feedpak(
+        str(MONEY_GP5),
+        track_indices=[1],
+        arrangement_names={1: 'Rhythm'},
+        audio_mode='none',
+        report=lambda stage, pct: None,
+    )
+    import io
+    import json
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
+        rhythm = json.loads(zf.read('arrangements/rhythm.json'))
+    assert rhythm['handshapes']
+    first = rhythm['handshapes'][0]
+    assert set(first) == {'chord_id', 'start_time', 'end_time', 'arp'}
+    assert first['end_time'] > first['start_time']
+
+
+@gp8_fixture_available
+def test_build_feedpak_gpif_keys_track_gets_notation():
+    result = pipeline.build_feedpak(
+        str(MONEY_GP8),
+        track_indices=[3, 5],  # Bass, Electric Piano (keys)
+        arrangement_names={3: 'Bass', 5: 'Keys'},
+        audio_mode='none',
+        report=lambda stage, pct: None,
+    )
+    import io
+    import json
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
+        names = zf.namelist()
+        manifest = yaml.safe_load(zf.read('manifest.yaml'))
+        keys_entry = next(a for a in manifest['arrangements'] if a['name'] == 'Keys')
+        assert 'notation' in keys_entry
+        notation = json.loads(zf.read(keys_entry['notation']))
+
+    assert notation['instrument'] == 'piano'
+    assert notation['measures']
+
+
+@gp8_fixture_available
+def test_build_feedpak_gpif_vocal_track_produces_vocal_pitch():
+    result = pipeline.build_feedpak(
+        str(MONEY_GP8),
+        track_indices=[0, 3],  # Singer (vocal), Bass
+        arrangement_names={0: 'Vocals', 3: 'Bass'},
+        audio_mode='none',
+        report=lambda stage, pct: None,
+    )
+    import io
+    import json
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
+        names = zf.namelist()
+        assert 'vocal_pitch.json' in names
+        manifest = yaml.safe_load(zf.read('manifest.yaml'))
+        assert manifest['vocal_pitch'] == 'vocal_pitch.json'
+        vp = json.loads(zf.read('vocal_pitch.json'))
+
+    assert vp['version'] == 1
+    assert len(vp['notes']) > 100
+    assert all(0 < n['midi'] <= 127 for n in vp['notes'])
+
+
+@fixture_available
+def test_build_feedpak_gp345_keys_json_present_when_extractable():
+    result = pipeline.build_feedpak(
+        str(MONEY_GP5),
+        track_indices=[1],
+        arrangement_names={1: 'Rhythm'},
+        audio_mode='none',
+        report=lambda stage, pct: None,
+    )
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
+        manifest = yaml.safe_load(zf.read('manifest.yaml'))
+    # Whatever key the source declares (or its default), the pointer and
+    # side file must be consistently present together.
+    assert manifest.get('keys') == 'keys.json'

@@ -366,6 +366,20 @@ function fprShowResult(msg) {
         ? '<span class="text-green-400 text-xs">✓ Passes spec validation</span>'
         : '<span class="text-amber-400/80 text-xs">⚠ Some parts did not validate — see notes below</span>';
 
+    const f = msg.features || {};
+    const featureLabels = [
+        f.song_timeline && 'sections/beats',
+        f.keys && 'key signature',
+        f.lyrics && 'lyrics',
+        f.vocal_pitch && 'vocal pitch',
+        f.handshapes && 'chord shapes',
+        f.drum_arrangements ? `${f.drum_arrangements} drum arrangement(s)` : null,
+        f.notation ? `${f.notation} notation part(s)` : null,
+    ].filter(Boolean);
+    const featuresHtml = featureLabels.length
+        ? `<p class="text-xs text-gray-500 mt-2">Captured: ${featureLabels.map(esc).join(' · ')}</p>`
+        : '';
+
     document.getElementById('fpr-result').innerHTML = `
         <div class="bg-green-900/20 border border-green-800/30 rounded-xl p-5 text-center">
             <p class="text-green-400 font-semibold mb-1">Feedpak created!</p>
@@ -374,6 +388,7 @@ function fprShowResult(msg) {
                 ${msg.arrangement_count} arrangement(s) &nbsp;·&nbsp; ${mins}:${String(secs).padStart(2, '0')}
             </p>
             <p class="mt-2">${validityBadge}</p>
+            ${featuresHtml}
             ${warningsHtml}
             <button onclick="fprReset()"
                 class="mt-4 px-4 py-2 bg-dark-600 hover:bg-dark-500 rounded-xl text-sm text-gray-300 transition">

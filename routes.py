@@ -347,6 +347,7 @@ def setup(app, context):
                     'duration': result['duration'],
                     'warnings': result['warnings'],
                     'valid': not result['validation'],
+                    'features': result['features'],
                 })
             except _pipeline.UnsupportedFormatError as e:
                 progress_queue.put_nowait({'error': str(e)})

@@ -30,38 +30,43 @@ def available() -> bool:
     return jsonschema is not None
 
 
-def validate_manifest(manifest: dict) -> list[str]:
-    """Return a list of human-readable error strings (empty = valid)."""
+def _validate_against(schema_name: str, payload: dict) -> list[str]:
     if jsonschema is None:
-        return ['jsonschema not installed — skipped manifest validation']
-    schema = _load_schema('manifest.schema.json')
+        return [f'jsonschema not installed — skipped validation against {schema_name}']
+    schema = _load_schema(schema_name)
     validator = jsonschema.Draft202012Validator(schema)
     return [
         f'{".".join(str(p) for p in e.path) or "<root>"}: {e.message}'
-        for e in sorted(validator.iter_errors(manifest), key=lambda e: list(e.path))
+        for e in sorted(validator.iter_errors(payload), key=lambda e: list(e.path))
     ]
+
+
+def validate_manifest(manifest: dict) -> list[str]:
+    return _validate_against('manifest.schema.json', manifest)
 
 
 def validate_arrangement(payload: dict) -> list[str]:
-    if jsonschema is None:
-        return ['jsonschema not installed — skipped arrangement validation']
-    schema = _load_schema('arrangement.schema.json')
-    validator = jsonschema.Draft202012Validator(schema)
-    return [
-        f'{".".join(str(p) for p in e.path) or "<root>"}: {e.message}'
-        for e in sorted(validator.iter_errors(payload), key=lambda e: list(e.path))
-    ]
+    return _validate_against('arrangement.schema.json', payload)
 
 
 def validate_song_timeline(payload: dict) -> list[str]:
-    if jsonschema is None:
-        return ['jsonschema not installed — skipped song_timeline validation']
-    schema = _load_schema('song-timeline.schema.json')
-    validator = jsonschema.Draft202012Validator(schema)
-    return [
-        f'{".".join(str(p) for p in e.path) or "<root>"}: {e.message}'
-        for e in sorted(validator.iter_errors(payload), key=lambda e: list(e.path))
-    ]
+    return _validate_against('song-timeline.schema.json', payload)
+
+
+def validate_keys(payload: dict) -> list[str]:
+    return _validate_against('keys.schema.json', payload)
+
+
+def validate_vocal_pitch(payload: dict) -> list[str]:
+    return _validate_against('vocal-pitch.schema.json', payload)
+
+
+def validate_drum_tab(payload: dict) -> list[str]:
+    return _validate_against('drum-tab.schema.json', payload)
+
+
+def validate_notation(payload: dict) -> list[str]:
+    return _validate_against('notation.schema.json', payload)
 
 
 def validate_pack(
@@ -69,6 +74,10 @@ def validate_pack(
     manifest: dict,
     arrangement_files: dict[str, dict],
     song_timeline: dict | None = None,
+    keys: dict | None = None,
+    vocal_pitch: dict | None = None,
+    drum_tab_files: dict[str, dict] | None = None,
+    notation_files: dict[str, dict] | None = None,
 ) -> dict[str, list[str]]:
     """Validate every piece of an in-memory pack. Returns {part: [errors]},
     only including parts that had at least one error."""
@@ -87,5 +96,25 @@ def validate_pack(
         errs = validate_song_timeline(song_timeline)
         if errs:
             report['song_timeline.json'] = errs
+
+    if keys is not None:
+        errs = validate_keys(keys)
+        if errs:
+            report['keys.json'] = errs
+
+    if vocal_pitch is not None:
+        errs = validate_vocal_pitch(vocal_pitch)
+        if errs:
+            report['vocal_pitch.json'] = errs
+
+    for filename, payload in (drum_tab_files or {}).items():
+        errs = validate_drum_tab(payload)
+        if errs:
+            report[filename] = errs
+
+    for filename, payload in (notation_files or {}).items():
+        errs = validate_notation(payload)
+        if errs:
+            report[filename] = errs
 
     return report

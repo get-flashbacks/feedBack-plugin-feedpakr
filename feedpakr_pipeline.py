@@ -53,6 +53,10 @@ import feedpakr_pack as pack
 import feedpakr_validate as validate
 import feedpakr_lyrics as lyrics_mod
 import feedpakr_audio as audio_mod
+import feedpakr_tones as tones_mod
+import feedpakr_keys as keys_mod
+import feedpakr_handshapes as handshapes_mod
+import feedpakr_notation as notation_mod
 
 log = logging.getLogger('feedBack.plugin.feedpakr')
 
@@ -391,11 +395,31 @@ def build_feedpak(
             gp_path, track_indices, audio_mode, user_audio_path, tmp_dir, warnings, report,
         )
 
+        # Drums-as-arrangements (spec 1.17.0) needs gp2rs.convert_drum_track_to_drumtab,
+        # which has no gp2rs_gpx equivalent — GPIF drum tracks stay on the
+        # legacy fretted (string*24+fret) encoding gp2rs_gpx already wrote.
+        drum_indices: set[int] = (
+            set() if is_gpif else
+            {t['index'] for t in parsed['tracks'] if t['is_drums'] and t['index'] in track_indices}
+        )
+
+        gp345_tones = None
+        if not is_gpif and gp_song is not None:
+            try:
+                gp345_tones = tones_mod.extract_gp345_tones(gp_song, track_indices)
+            except Exception as e:
+                warnings.append(f'Tone extraction failed: {e}')
+
+        track_by_index = {t['index']: t for t in parsed['tracks']}
+
         report('Reading arrangement data…', 55)
         arrangement_entries: list[dict] = []
         arrangement_files: dict[str, dict] = {}
+        drum_tab_files: dict[str, dict] = {}
+        notation_files: dict[str, dict] = {}
         taken_ids: set[str] = set()
         lyrics_entries: list[dict] | None = None
+        vocal_pitch_data: dict | None = None
 
         for idx, xml_path in zip(output_order, xml_paths):
             if lyrics_mod.is_vocals_xml(xml_path):
@@ -403,9 +427,39 @@ def build_feedpak(
                     entries = lyrics_mod.parse_vocals_xml(xml_path)
                     if entries:
                         lyrics_entries = entries
+                    vocal_pitch_data = lyrics_mod.parse_vocal_pitch_xml(xml_path)
                 except Exception as e:
                     warnings.append(f'Lyrics extraction failed for a vocal track: {e}')
                 continue
+
+            if idx is not None and idx in drum_indices:
+                try:
+                    drum_name = names.get(idx) or 'Drums'
+                    drum_tab = gp2rs.convert_drum_track_to_drumtab(
+                        gp_song, idx, arrangement_name=drum_name,
+                    )
+                    arr_id = pack.arrangement_id_for(drum_tab.get('name') or drum_name, taken_ids)
+                    dt_filename = f'drum_tab_{arr_id}.json'
+                    drum_tab_files[dt_filename] = drum_tab
+                    arrangement_entries.append({
+                        'id': arr_id,
+                        'name': drum_tab.get('name', drum_name),
+                        'type': 'drums',
+                        'drum_tab': dt_filename,
+                    })
+                    warnings.append(
+                        f'"{drum_tab.get("name", drum_name)}" was packed as a proper drum '
+                        'arrangement (drum_tab.json) rather than fret-encoded notes — the '
+                        'library index may not surface it correctly yet (feedBack#1027), '
+                        'a known host limitation, not a fault in this pack.'
+                    )
+                    continue
+                except Exception as e:
+                    warnings.append(
+                        f'Drum tab conversion failed for a track, falling back to fretted '
+                        f'encoding: {e}'
+                    )
+                    # fall through — xml_path is still the fretted drum XML gp2rs already wrote
 
             try:
                 arr = song_mod.parse_arrangement(xml_path)
@@ -419,16 +473,44 @@ def build_feedpak(
                 arr.capo = gpif_capo.get(idx, 0) if is_gpif else _capo_for_track(gp_song, idx)
 
             wire = song_mod.arrangement_to_wire(arr)
+
+            if not wire.get('handshapes') and wire.get('chords'):
+                try:
+                    wire['handshapes'] = handshapes_mod.derive_handshapes(wire)
+                except Exception as e:
+                    warnings.append(f'Hand-shape derivation failed for {arr.name}: {e}')
+
+            try:
+                tones = tones_mod.parse_tones_xml(xml_path) if is_gpif else gp345_tones
+                if tones:
+                    wire['tones'] = tones
+            except Exception as e:
+                warnings.append(f'Tone extraction failed for {arr.name}: {e}')
+
             arr_id = pack.arrangement_id_for(arr.name, taken_ids)
             filename = f'{arr_id}.json'
             arrangement_files[filename] = wire
-            arrangement_entries.append({
+            entry = {
                 'id': arr_id,
                 'name': arr.name,
                 'file': f'arrangements/{filename}',
                 'tuning': list(arr.tuning),
                 'capo': arr.capo,
-            })
+            }
+
+            if is_gpif and idx is not None and track_by_index.get(idx, {}).get('is_piano'):
+                try:
+                    notation = notation_mod.convert_keys_track_notation(
+                        gp_path, idx, track_by_index[idx]['name'],
+                    )
+                    if notation:
+                        notation_filename = f'notation_{arr_id}.json'
+                        notation_files[notation_filename] = notation
+                        entry['notation'] = notation_filename
+                except Exception as e:
+                    warnings.append(f'Notation extraction failed for {arr.name}: {e}')
+
+            arrangement_entries.append(entry)
 
         if not arrangement_entries:
             raise RuntimeError('None of the selected tracks could be converted.')
@@ -440,7 +522,7 @@ def build_feedpak(
             warnings.append('No sections/beats found in the source file.')
         duration = float(song_meta.song_length) if song_meta else 0.0
 
-        report('Extracting lyrics…', 74)
+        report('Extracting lyrics…', 72)
         if lyrics_entries is None and not is_gpif and gp_song is not None and song_meta is not None:
             try:
                 lyrics_entries = lyrics_mod.extract_gp345_lyrics(
@@ -454,6 +536,18 @@ def build_feedpak(
             except Exception as e:
                 warnings.append(f'Lyrics extraction failed: {e}')
 
+        report('Detecting key signature…', 76)
+        keys_data = None
+        if song_timeline and song_timeline.get('beats'):
+            try:
+                if is_gpif:
+                    gpif_root = gp2rs_gpx._load_gpif(gp_path)
+                    keys_data = keys_mod.extract_gpif_keys(gpif_root, song_timeline['beats'])
+                elif gp_song is not None:
+                    keys_data = keys_mod.extract_gp345_keys(gp_song, song_timeline['beats'])
+            except Exception as e:
+                warnings.append(f'Key signature extraction failed: {e}')
+
         manifest = pack.assemble_manifest(
             title=use_title,
             artist=use_artist,
@@ -463,6 +557,8 @@ def build_feedpak(
             stem_file=(f'stems/full{Path(audio_path).suffix.lower()}' if audio_path else None),
             song_timeline_present=song_timeline is not None,
             lyrics_present=bool(lyrics_entries),
+            keys_present=keys_data is not None,
+            vocal_pitch_present=vocal_pitch_data is not None,
         )
         if audio_path is None:
             warnings.append(
@@ -475,6 +571,10 @@ def build_feedpak(
             manifest=manifest,
             arrangement_files=arrangement_files,
             song_timeline=song_timeline,
+            keys=keys_data,
+            vocal_pitch=vocal_pitch_data,
+            drum_tab_files=drum_tab_files,
+            notation_files=notation_files,
         )
         for part, errs in validation.items():
             warnings.append(f'{part}: {len(errs)} schema issue(s) — see validation report.')
@@ -485,6 +585,10 @@ def build_feedpak(
             arrangement_files=arrangement_files,
             song_timeline=song_timeline,
             lyrics=lyrics_entries,
+            keys=keys_data,
+            vocal_pitch=vocal_pitch_data,
+            drum_tab_files=drum_tab_files,
+            notation_files=notation_files,
             audio_path=audio_path,
             cover_path=cover_path,
         )
@@ -499,6 +603,17 @@ def build_feedpak(
             'album': use_album,
             'duration': duration,
             'arrangement_count': len(arrangement_entries),
+            'features': {
+                'song_timeline': song_timeline is not None,
+                'lyrics': bool(lyrics_entries),
+                'keys': keys_data is not None,
+                'vocal_pitch': vocal_pitch_data is not None,
+                'drum_arrangements': len(drum_tab_files),
+                'notation': len(notation_files),
+                'handshapes': any(
+                    arr.get('handshapes') for arr in arrangement_files.values()
+                ),
+            },
         }
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
