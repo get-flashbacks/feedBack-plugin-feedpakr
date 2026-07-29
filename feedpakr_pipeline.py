@@ -480,8 +480,36 @@ def build_feedpak(
                 except Exception as e:
                     warnings.append(f'Hand-shape derivation failed for {arr.name}: {e}')
 
+            # Known host gap (gp2rs_gpx.convert_file's chord-template builder):
+            # when a chord occurrence has two notes on the same string, only
+            # the last one survives into that template's single-fret-per-
+            # string diagram summary. The per-occurrence note data itself
+            # (what's actually played) is unaffected — chord.notes always
+            # keeps every note — this only makes the auto-generated chord
+            # diagram/name preview incomplete for that shape.
+            same_string_collisions = sum(
+                1 for c in wire.get('chords', [])
+                if len({n['s'] for n in c.get('notes', [])}) < len(c.get('notes', []))
+            )
+            if same_string_collisions:
+                warnings.append(
+                    f'{same_string_collisions} chord(s) in "{arr.name}" have two notes on '
+                    'the same string — the auto-generated chord-diagram summary only shows '
+                    'one of them (a known gp2rs_gpx host limitation), but the actual playable '
+                    'note data for both is intact.'
+                )
+
             try:
                 tones = tones_mod.parse_tones_xml(xml_path) if is_gpif else gp345_tones
+                # GPIF instrument/patch automation (§6.9) — a different GP
+                # mechanism than <Bank> (e.g. a keys track switching piano
+                # -> strings mid-song); prefer it when present since <Bank>
+                # is rarely used and doesn't apply to non-guitar tracks at
+                # all (gp2rs_gpx never even collects it for keys tracks).
+                if is_gpif and idx is not None:
+                    sound_changes = tones_mod.extract_gpif_sound_changes(gp_path, idx)
+                    if sound_changes:
+                        tones = sound_changes
                 if tones:
                     wire['tones'] = tones
             except Exception as e:
@@ -612,6 +640,9 @@ def build_feedpak(
                 'notation': len(notation_files),
                 'handshapes': any(
                     arr.get('handshapes') for arr in arrangement_files.values()
+                ),
+                'tones': any(
+                    arr.get('tones') for arr in arrangement_files.values()
                 ),
             },
         }

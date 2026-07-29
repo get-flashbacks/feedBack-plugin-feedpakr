@@ -457,6 +457,7 @@ function fprShowResult(msg) {
         f.lyrics && 'lyrics',
         f.vocal_pitch && 'vocal pitch',
         f.handshapes && 'chord shapes',
+        f.tones && 'tone changes',
         f.drum_arrangements ? `${f.drum_arrangements} drum arrangement(s)` : null,
         f.notation ? `${f.notation} notation part(s)` : null,
     ].filter(Boolean);

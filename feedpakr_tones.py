@@ -29,6 +29,11 @@ try:
 except ImportError:  # pragma: no cover
     gp2rs = None
 
+try:
+    import gp2rs_gpx
+except ImportError:  # pragma: no cover
+    gp2rs_gpx = None
+
 # GM program -> friendly tone name, for the families GP charts actually use
 # (guitar 24-31, bass 32-39). Anything else gets a generic "Tone N" label
 # rather than being silently dropped.
@@ -115,3 +120,97 @@ def extract_gp345_tones(gp_song, track_indices: list[int]) -> dict | None:
         'base': deduped[0][1],
         'changes': [{'t': t, 'name': name} for t, name in deduped],
     }
+
+
+def _masterbar_start_times(masterbars, tempo_map, tempo_bpm: float) -> list[float]:
+    """Cumulative start time (seconds) of each MasterBar, given a bar->bpm
+    tempo_map (gp2rs_gpx._build_tempo_map's shape). Mirrors the same
+    bar-duration math gp2rs_gpx._collect_tone_events uses internally, so a
+    Sound-automation time and a <Bank>-tone time land on the same clock."""
+    times: list[float] = []
+    current_time = 0.0
+    tempo_iter = iter(tempo_map)
+    next_tempo_bar, next_tempo_bpm = next(tempo_iter, (999999, tempo_bpm))
+    cur_tempo = tempo_bpm
+    for mb_idx, mb in enumerate(masterbars):
+        while mb_idx >= next_tempo_bar:
+            cur_tempo = next_tempo_bpm
+            next_tempo_bar, next_tempo_bpm = next(tempo_iter, (999999, cur_tempo))
+        times.append(current_time)
+        time_sig = mb.findtext('Time', '4/4')
+        try:
+            num_b, den_b = (int(x) for x in time_sig.split('/'))
+        except ValueError:
+            num_b, den_b = 4, 4
+        current_time += num_b * (4.0 / den_b) * (60.0 / cur_tempo)
+    return times
+
+
+def extract_gpif_sound_changes(gp_path: str, track_index: int) -> dict | None:
+    """GPIF-only — reads a *different* mechanism than parse_tones_xml: a
+    track-level `<Automations><Automation><Type>Sound</Type>…` list, which
+    swaps the MIDI/RSE instrument a track plays at a given bar (e.g. a keys
+    track switching from piano to strings mid-song). Neither
+    gp2rs_gpx._collect_tone_events (which only reads per-beat <Bank>, the
+    older guitar/bass-oriented mechanism, and is only even called for
+    non-keys tracks) nor anything else in the host reads this. Found
+    against 'Bring Me To Life (J).gp': its Piano track switches to
+    Ensemble/Violin at bar 13 and back to piano at bar 85 — a real,
+    previously-unreported tone change.
+
+    Returns the same {"base", "changes"} shape as parse_tones_xml /
+    extract_gp345_tones (feedpak spec §6.9) — no `rig`/`base_rig`, since
+    GP's RSE softsynth patches aren't portable rig data (no .sf2 ships with
+    the source); a Reader gets the tone-change *names* honestly rather than
+    an invented playable rig."""
+    if gp2rs_gpx is None:
+        return None
+    try:
+        root = gp2rs_gpx._load_gpif(gp_path)
+        raw_tracks = gp2rs_gpx._gpif_tracks(root)
+        if track_index >= len(raw_tracks):
+            return None
+        track_el = raw_tracks[track_index].get('_el')
+        if track_el is None:
+            return None
+        autos_el = track_el.find('Automations')
+        if autos_el is None:
+            return None
+
+        bar_events: list[tuple[int, str]] = []
+        for a in autos_el.findall('Automation'):
+            if (a.findtext('Type') or '') != 'Sound':
+                continue
+            bar_text = a.findtext('Bar')
+            value = (a.findtext('Value') or '').strip()
+            if bar_text is None or not value:
+                continue
+            try:
+                bar_idx = int(bar_text)
+            except ValueError:
+                continue
+            # Value is "Path;Name;Role" (e.g. "Orchestra/Strings/Violin;
+            # Ensemble;Factory") — the display name is the middle segment.
+            name = value.split(';')[1].strip() if ';' in value else value
+            if name:
+                bar_events.append((bar_idx, name))
+        if not bar_events:
+            return None
+        bar_events.sort(key=lambda e: e[0])
+
+        masterbars = list(root.find('MasterBars') or [])
+        tempo_map = gp2rs_gpx._build_tempo_map(root)
+        tempo_bpm = gp2rs_gpx._gpif_tempo(root)
+        bar_times = _masterbar_start_times(masterbars, tempo_map, tempo_bpm)
+
+        changes: list[dict] = []
+        for bar_idx, name in bar_events:
+            if changes and changes[-1]['name'] == name:
+                continue  # dedupe consecutive identical names
+            t = bar_times[bar_idx] if 0 <= bar_idx < len(bar_times) else 0.0
+            changes.append({'t': round(t, 3), 'name': name})
+        if not changes:
+            return None
+        return {'base': changes[0]['name'], 'changes': changes}
+    except Exception:
+        return None
