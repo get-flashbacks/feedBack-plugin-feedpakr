@@ -66,6 +66,7 @@ def assemble_manifest(
     duration: float,
     arrangements: list[dict],
     stem_file: str | None,
+    cover_file: str | None = None,
     song_timeline_present: bool = False,
     lyrics_present: bool = False,
     keys_present: bool = False,
@@ -75,7 +76,12 @@ def assemble_manifest(
 
     stem_file is the manifest-relative path of the packed full mixdown
     (e.g. "stems/full.ogg" or "stems/full.wav"), or None when no audio
-    could be produced.
+    could be produced. cover_file is the manifest-relative path of the
+    packed cover image (e.g. "cover.jpg"), or None when there isn't one —
+    per spec §2.2 ("nothing is auto-discovered by scanning; a Reader MUST
+    NOT rely on filename"), writing cover.jpg into the zip without also
+    pointing the manifest's `cover` key at it means a compliant Reader
+    never surfaces it, even though the bytes are right there.
     """
     manifest: dict = {
         'feedpak_version': FEEDPAK_VERSION,
@@ -99,6 +105,8 @@ def assemble_manifest(
         [{'id': 'full', 'file': stem_file, 'default': True}]
         if stem_file else []
     )
+    if cover_file:
+        manifest['cover'] = cover_file
 
     if song_timeline_present:
         manifest['song_timeline'] = 'song_timeline.json'
