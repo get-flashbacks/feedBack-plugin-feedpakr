@@ -272,7 +272,7 @@ def _resolve_audio(
     callers treat that as the §5.3.2 authoring-intermediate carve-out, not
     a hard error."""
     if audio_mode == 'none':
-        report('Audio skipped (unchecked).', 45)
+        report('Audio skipped (unchecked).', 15)
         return None, 0.0
 
     if audio_mode == 'midi':
@@ -295,7 +295,7 @@ def _resolve_audio(
         if not user_audio_path or not Path(user_audio_path).exists():
             warnings.append('Audio skipped: no audio file was attached.')
             return None, 0.0
-        report('Aligning audio to the chart…', 42)
+        report('Aligning audio to the chart…', 15)
         offset, _points, err = audio_mod.autosync_audio(gp_path, user_audio_path)
         if err:
             warnings.append(f'Autosync failed ({err}) — using the attached audio with a zero offset.')
@@ -370,12 +370,28 @@ def build_feedpak(
         names = {idx: arrangement_names.get(idx, '') for idx in track_indices}
         output_order = _output_track_order(gp_path, track_indices, names)
 
+        # Resolve audio (and its sync offset) BEFORE converting the chart:
+        # convert_file's own audio_offset param is what actually shifts note
+        # times to line up with the audio (see its docstring, "Seconds to add
+        # for audio sync") — there's no separate manifest-level offset field
+        # anywhere in this pipeline (feedpakr_pack.py has none), so an offset
+        # computed here has nowhere else to go. Previously this ran AFTER
+        # convert_file and the resulting audio_offset was never fed back in
+        # at all — 'embedded' mode's GP8 lead-in offset and 'sync' mode's
+        # autosync offset were both silently discarded, leaving the chart
+        # and audio measurably out of alignment whenever either wasn't 0.
+        report('Generating audio…', 10)
+        audio_path, audio_offset = _resolve_audio(
+            gp_path, track_indices, audio_mode, user_audio_path, tmp_dir, warnings, report,
+        )
+
         report('Converting tracks to arrangement XML…', 20)
         xml_dir = tmp_dir / 'xml'
         xml_paths = gp2rs.convert_file(
             gp_path, str(xml_dir),
             track_indices=track_indices,
             arrangement_names=names,
+            audio_offset=audio_offset,
         )
         if not xml_paths:
             raise RuntimeError('No arrangements produced from the selected tracks.')
@@ -389,11 +405,6 @@ def build_feedpak(
                 'source tracks — capo may be incorrect for this import.'
             )
             output_order = [None] * len(xml_paths)
-
-        report('Generating audio…', 40)
-        audio_path, audio_offset = _resolve_audio(
-            gp_path, track_indices, audio_mode, user_audio_path, tmp_dir, warnings, report,
-        )
 
         # Drums-as-arrangements (spec 1.17.0) needs gp2rs.convert_drum_track_to_drumtab,
         # which has no gp2rs_gpx equivalent — GPIF drum tracks stay on the
@@ -583,6 +594,10 @@ def build_feedpak(
             duration=duration,
             arrangements=arrangement_entries,
             stem_file=(f'stems/full{Path(audio_path).suffix.lower()}' if audio_path else None),
+            cover_file=(
+                f'cover{Path(cover_path).suffix.lower() or ".jpg"}'
+                if cover_path and Path(cover_path).exists() else None
+            ),
             song_timeline_present=song_timeline is not None,
             lyrics_present=bool(lyrics_entries),
             keys_present=keys_data is not None,

@@ -99,6 +99,35 @@ def test_build_feedpak_extracts_all_16_sections():
 
 
 @fixture_available
+def test_build_feedpak_cover_is_referenced_by_manifest(tmp_path):
+    """End-to-end regression test for the cover.jpg-written-but-not-
+    pointed-to bug: a cover_path must not just land in the zip, it must
+    make the manifest's `cover` key point at it — see
+    test_pack.test_assemble_manifest_includes_cover_when_present for the
+    unit-level version of this same fix."""
+    cover_path = tmp_path / 'art.jpg'
+    cover_path.write_bytes(b'\xff\xd8\xff\xe0fake-jpeg-bytes')
+
+    result = pipeline.build_feedpak(
+        str(MONEY_GP5),
+        track_indices=[1],
+        arrangement_names={1: 'Rhythm'},
+        audio_mode='none',
+        cover_path=str(cover_path),
+        report=lambda stage, pct: None,
+    )
+
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
+        names = zf.namelist()
+        manifest = yaml.safe_load(zf.read('manifest.yaml'))
+
+    assert 'cover.jpg' in names
+    assert manifest.get('cover') == 'cover.jpg'
+
+
+@fixture_available
 def test_build_feedpak_without_audio_warns_authoring_intermediate():
     result = pipeline.build_feedpak(
         str(MONEY_GP5),
@@ -109,6 +138,39 @@ def test_build_feedpak_without_audio_warns_authoring_intermediate():
     )
     assert any('authoring intermediate' in w for w in result['warnings'])
     assert 'manifest.yaml' in result['validation']  # empty stems fails minItems
+
+
+@fixture_available
+def test_build_feedpak_feeds_resolved_audio_offset_into_convert_file(monkeypatch):
+    """Regression test: audio_offset used to be resolved AFTER convert_file
+    ran and was never fed back in — 'embedded'/'sync' mode's real offset
+    (GP8 lead-in, or autosync alignment) was silently discarded, since
+    there's no separate manifest-level offset field anywhere in this
+    pipeline (feedpakr_pack.py has none) for it to land in instead. Locks
+    in the fix: whatever _resolve_audio returns must reach convert_file's
+    own audio_offset kwarg, the only place that actually shifts note times."""
+    monkeypatch.setattr(
+        pipeline, '_resolve_audio',
+        lambda *a, **k: (None, 1.75),
+    )
+
+    captured = {}
+    real_convert_file = pipeline.gp2rs.convert_file
+
+    def _spy_convert_file(*args, **kwargs):
+        captured['audio_offset'] = kwargs.get('audio_offset')
+        return real_convert_file(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline.gp2rs, 'convert_file', _spy_convert_file)
+
+    pipeline.build_feedpak(
+        str(MONEY_GP5),
+        track_indices=[3],
+        arrangement_names={3: 'Bass'},
+        audio_mode='sync',
+        report=lambda stage, pct: None,
+    )
+    assert captured['audio_offset'] == 1.75
 
 
 # ── GPIF (.gp / .gpx, GP6/7/8) ────────────────────────────────────────────
