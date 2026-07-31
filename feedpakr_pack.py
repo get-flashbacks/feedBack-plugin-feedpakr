@@ -63,6 +63,14 @@ def assemble_manifest(
     artist: str,
     album: str = '',
     year: int | None = None,
+    album_artist: str = '',
+    track: int | None = None,
+    disc: int | None = None,
+    genres: list[str] | None = None,
+    mbid: str = '',
+    isrc: str = '',
+    language: str = '',
+    authors: list[str] | None = None,
     duration: float,
     arrangements: list[dict],
     stem_file: str | None,
@@ -82,6 +90,14 @@ def assemble_manifest(
     NOT rely on filename"), writing cover.jpg into the zip without also
     pointing the manifest's `cover` key at it means a compliant Reader
     never surfaces it, even though the bytes are right there.
+
+    album_artist/track/disc/genres/mbid/isrc/language/authors are all
+    optional, schema-valid top-level manifest keys (spec §5.1/§5.4) —
+    editable in the editor plugin's create-modal but, until now, never
+    exposed anywhere in feedpakr's own import flow. `authors` here is a
+    flat list of names (the UI's "who charted this" field); each becomes
+    an `{name}` object per spec §5.4 — role/email/url aren't collected
+    here, so they're simply omitted rather than sent empty.
     """
     manifest: dict = {
         'feedpak_version': FEEDPAK_VERSION,
@@ -92,6 +108,22 @@ def assemble_manifest(
         manifest['album'] = album
     if year:
         manifest['year'] = int(year)
+    if album_artist:
+        manifest['album_artist'] = album_artist
+    if track:
+        manifest['track'] = int(track)
+    if disc:
+        manifest['disc'] = int(disc)
+    if genres:
+        manifest['genres'] = list(genres)
+    if mbid:
+        manifest['mbid'] = mbid
+    if isrc:
+        manifest['isrc'] = isrc
+    if language:
+        manifest['language'] = language
+    if authors:
+        manifest['authors'] = [{'name': a} for a in authors if a]
     manifest['duration'] = float(duration)
     manifest['arrangements'] = arrangements
 
