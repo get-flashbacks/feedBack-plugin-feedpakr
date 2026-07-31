@@ -147,6 +147,13 @@ async function fprHandleAudioFile(file) {
                 return;
             }
             _audioAttached = true;
+            // Force the mode radio to "sync" — otherwise a build fired while
+            // some other mode is still checked (whatever it defaulted to)
+            // silently ignores this attached audio entirely instead of
+            // erroring, since the build-time guard only checks the reverse
+            // case (sync selected, nothing attached).
+            const syncRadio = document.querySelector('input[name="fpr-audio-mode"][value="sync"]');
+            if (syncRadio) { syncRadio.checked = true; fprUpdateAudioModeUI(); }
             if (status) status.textContent = `${file.name} attached — will be aligned to the chart during build.`;
         } catch (err) {
             if (status) status.textContent = `Audio upload failed: ${String(err)}`;
@@ -175,6 +182,11 @@ async function fprFetchYoutube() {
             return;
         }
         _audioAttached = true;
+        // Same reasoning as fprHandleAudioFile: force "sync" so this fetched
+        // audio can't silently go unused under whatever mode happened to be
+        // checked before the fetch completed.
+        const syncRadio = document.querySelector('input[name="fpr-audio-mode"][value="sync"]');
+        if (syncRadio) { syncRadio.checked = true; fprUpdateAudioModeUI(); }
         if (status) status.textContent = 'Audio fetched — will be aligned to the chart during build.';
     } catch (err) {
         if (status) status.textContent = `YouTube fetch failed: ${String(err)}`;
