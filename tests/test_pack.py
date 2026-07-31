@@ -64,6 +64,39 @@ def test_assemble_manifest_omits_optional_keys_when_absent():
     assert 'year' not in manifest
     assert 'song_timeline' not in manifest
     assert 'lyrics' not in manifest
+    assert 'cover' not in manifest
+
+
+def test_assemble_manifest_normalizes_authors():
+    manifest = pack.assemble_manifest(
+        title='T', artist='A', duration=10.0, arrangements=[], stem_file=None,
+        authors=[' Alice ', '   ', '', 'Bob'],
+    )
+    assert manifest['authors'] == [{'name': 'Alice'}, {'name': 'Bob'}]
+
+    blank = pack.assemble_manifest(
+        title='T', artist='A', duration=10.0, arrangements=[], stem_file=None,
+        authors=[' ', '\t'],
+    )
+    assert 'authors' not in blank
+
+
+def test_assemble_manifest_includes_cover_when_present():
+    """Regression test: write_feedpak_zip happily writes cover.jpg into the
+    zip given a cover_path, but per spec §2.2 ("nothing is auto-discovered
+    by scanning; a Reader MUST NOT rely on filename") that file is invisible
+    to a compliant Reader unless the manifest's own `cover` key points at
+    it. assemble_manifest was missing a cover_file parameter entirely, so
+    every feedpakr-built pack with cover art shipped a cover.jpg no reader
+    would ever show — caught via a real user-reported "no cover" symptom
+    against packs that, on disk, did contain a cover image."""
+    manifest = pack.assemble_manifest(
+        title='T', artist='A', duration=10.0,
+        arrangements=[{'id': 'lead', 'name': 'Lead', 'file': 'arrangements/lead.json'}],
+        stem_file=None,
+        cover_file='cover.jpg',
+    )
+    assert manifest['cover'] == 'cover.jpg'
 
 
 def test_write_feedpak_zip_roundtrip(tmp_path):

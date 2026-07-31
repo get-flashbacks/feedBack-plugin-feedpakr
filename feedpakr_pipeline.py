@@ -295,7 +295,7 @@ def _resolve_audio(
     callers treat that as the §5.3.2 authoring-intermediate carve-out, not
     a hard error."""
     if audio_mode == 'none':
-        report('Audio skipped (unchecked).', 45)
+        report('Audio skipped (unchecked).', 15)
         return None, 0.0
 
     if audio_mode == 'midi':
@@ -318,7 +318,7 @@ def _resolve_audio(
         if not user_audio_path or not Path(user_audio_path).exists():
             warnings.append('Audio skipped: no audio file was attached.')
             return None, 0.0
-        report('Aligning audio to the chart…', 42)
+        report('Aligning audio to the chart…', 15)
         offset, _points, err = audio_mod.autosync_audio(gp_path, user_audio_path)
         if err:
             warnings.append(f'Autosync failed ({err}) — using the attached audio with a zero offset.')
@@ -345,6 +345,16 @@ def build_feedpak(
     title: str = '',
     artist: str = '',
     album: str = '',
+    year: int | None = None,
+    album_artist: str = '',
+    track: int | None = None,
+    disc: int | None = None,
+    genres: list[str] | None = None,
+    mbid: str = '',
+    isrc: str = '',
+    language: str = '',
+    authors: list[str] | None = None,
+    notation_track_indices: set[int] | None = None,
     audio_mode: str = 'midi',
     user_audio_path: str | None = None,
     cover_path: str | None = None,
@@ -393,12 +403,31 @@ def build_feedpak(
         names = {idx: arrangement_names.get(idx, '') for idx in track_indices}
         output_order = _output_track_order(gp_path, track_indices, names)
 
+        # Resolve audio (and its sync offset) BEFORE converting the chart:
+        # convert_file's own audio_offset param is what actually shifts note
+        # times to line up with the audio (see its docstring, "Seconds to add
+        # for audio sync") — there's no separate manifest-level offset field
+        # anywhere in this pipeline (feedpakr_pack.py has none), so an offset
+        # computed here has nowhere else to go. Previously this ran AFTER
+        # convert_file and the resulting audio_offset was never fed back in
+        # at all — 'embedded' mode's GP8 lead-in offset and 'sync' mode's
+        # autosync offset were both silently discarded, leaving the chart
+        # and audio measurably out of alignment whenever either wasn't 0.
+        report('Generating audio…', 10)
+        audio_path, audio_offset = _resolve_audio(
+            gp_path, track_indices, audio_mode, user_audio_path, tmp_dir, warnings, report,
+        )
+        if audio_mode != 'none' and audio_path is None:
+            detail = warnings[-1] if warnings else 'Audio could not be produced.'
+            raise RuntimeError(detail)
+
         report('Converting tracks to arrangement XML…', 20)
         xml_dir = tmp_dir / 'xml'
         xml_paths = gp2rs.convert_file(
             gp_path, str(xml_dir),
             track_indices=track_indices,
             arrangement_names=names,
+            audio_offset=audio_offset,
         )
         if not xml_paths:
             raise RuntimeError('No arrangements produced from the selected tracks.')
@@ -412,11 +441,6 @@ def build_feedpak(
                 'source tracks — capo may be incorrect for this import.'
             )
             output_order = [None] * len(xml_paths)
-
-        report('Generating audio…', 40)
-        audio_path, audio_offset = _resolve_audio(
-            gp_path, track_indices, audio_mode, user_audio_path, tmp_dir, warnings, report,
-        )
 
         # Drums-as-arrangements (spec 1.17.0) needs gp2rs.convert_drum_track_to_drumtab,
         # which has no gp2rs_gpx equivalent — GPIF drum tracks stay on the
@@ -503,13 +527,21 @@ def build_feedpak(
                 except Exception as e:
                     warnings.append(f'Hand-shape derivation failed for {arr.name}: {e}')
 
-            # Known host gap (gp2rs_gpx.convert_file's chord-template builder):
-            # when a chord occurrence has two notes on the same string, only
-            # the last one survives into that template's single-fret-per-
-            # string diagram summary. The per-occurrence note data itself
-            # (what's actually played) is unaffected — chord.notes always
-            # keeps every note — this only makes the auto-generated chord
-            # diagram/name preview incomplete for that shape.
+            # Known host gap in BOTH gp2rs.py and gp2rs_gpx.py's chord-template
+            # builders (not gp2rs_gpx-only, despite this warning's original
+            # wording — confirmed by reproducing it on a plain .gp5 piano
+            # track, which never touches gp2rs_gpx): when a chord occurrence
+            # has two notes on the same string, only the last one survives
+            # into that template's single-fret-per-string diagram summary.
+            # Real for piano/keys/drum tracks (their string index is a MIDI
+            # bucket — string = midi // 24 — so two genuinely different
+            # pitches routinely collide on the same "string"); essentially
+            # impossible for guitar/bass, where a same-string collision would
+            # mean two different frets fingered on one physical string at
+            # once. The per-occurrence note data itself (what's actually
+            # played) is unaffected — chord.notes always keeps every note —
+            # this only makes the auto-generated chord diagram/name preview
+            # incomplete for that shape.
             same_string_collisions = sum(
                 1 for c in wire.get('chords', [])
                 if len({n['s'] for n in c.get('notes', [])}) < len(c.get('notes', []))
@@ -518,8 +550,8 @@ def build_feedpak(
                 warnings.append(
                     f'{same_string_collisions} chord(s) in "{arr.name}" have two notes on '
                     'the same string — the auto-generated chord-diagram summary only shows '
-                    'one of them (a known gp2rs_gpx host limitation), but the actual playable '
-                    'note data for both is intact.'
+                    'one of them (a known host limitation, most common on piano/keys tracks), '
+                    'but the actual playable note data for both is intact.'
                 )
 
             try:
@@ -549,10 +581,22 @@ def build_feedpak(
                 'capo': arr.capo,
             }
 
-            if is_gpif and idx is not None and track_by_index.get(idx, {}).get('is_piano'):
+            track_info = track_by_index.get(idx, {}) if idx is not None else {}
+            wants_notation = (
+                is_gpif and idx is not None
+                and (
+                    idx in notation_track_indices
+                    if notation_track_indices is not None
+                    else bool(track_info.get('is_piano'))
+                )
+            )
+            if wants_notation:
                 try:
-                    notation = notation_mod.convert_keys_track_notation(
-                        gp_path, idx, track_by_index[idx]['name'],
+                    notation = notation_mod.convert_track_notation(
+                        gp_path,
+                        idx,
+                        track_info.get('name') or arr.name,
+                        instrument='piano' if track_info.get('is_piano') else 'melodic',
                     )
                     if notation:
                         notation_filename = f'notation_{arr_id}.json'
@@ -573,15 +617,22 @@ def build_feedpak(
             warnings.append('No sections/beats found in the source file.')
         duration = float(song_meta.song_length) if song_meta else 0.0
 
-        # Validate audio duration against chart duration (±5% tolerance)
-        if audio_path and duration > 0.0:
+        # Sanity check: audio duration must match chart duration (allow ±5% tolerance for rounding).
+        if audio_path and duration > 0:
             audio_duration = audio_mod.get_audio_duration(audio_path)
             if audio_duration is not None:
-                tolerance = duration * 0.05
-                if abs(audio_duration - duration) > tolerance:
+                # convert_file shifts chart events by audio_offset, so compare
+                # the audio endpoint with the aligned chart endpoint rather
+                # than the unshifted source duration. This avoids flagging a
+                # legitimate recording lead-in as the wrong song.
+                aligned_duration = max(0.0, duration + audio_offset)
+                drift = abs(audio_duration - aligned_duration)
+                tolerance = max(aligned_duration, duration) * 0.05
+                if drift > tolerance:
                     warnings.append(
-                        f'Audio duration mismatch: audio is {audio_duration:.1f}s but chart is {duration:.1f}s. '
-                        'Check that the correct audio file was uploaded.'
+                        f'Audio duration mismatch: audio is {audio_duration:.1f}s but the aligned chart is '
+                        f'{aligned_duration:.1f}s. '
+                        f'Check that the correct audio file was uploaded.'
                     )
 
         report('Extracting lyrics…', 72)
@@ -610,15 +661,27 @@ def build_feedpak(
             except Exception as e:
                 warnings.append(f'Key signature extraction failed: {e}')
 
-        authors = _extract_authors(gp_path)
+        resolved_authors = authors or _extract_authors(gp_path)
         manifest = pack.assemble_manifest(
             title=use_title,
             artist=use_artist,
             album=use_album,
-            authors=authors if authors else None,
+            year=year,
+            album_artist=album_artist,
+            track=track,
+            disc=disc,
+            genres=genres,
+            mbid=mbid,
+            isrc=isrc,
+            language=language,
+            authors=resolved_authors,
             duration=duration,
             arrangements=arrangement_entries,
             stem_file=(f'stems/full{Path(audio_path).suffix.lower()}' if audio_path else None),
+            cover_file=(
+                f'cover{Path(cover_path).suffix.lower() or ".jpg"}'
+                if cover_path and Path(cover_path).exists() else None
+            ),
             song_timeline_present=song_timeline is not None,
             lyrics_present=bool(lyrics_entries),
             keys_present=keys_data is not None,
@@ -679,6 +742,9 @@ def build_feedpak(
                 ),
                 'tones': any(
                     arr.get('tones') for arr in arrangement_files.values()
+                ),
+                'real_audio': bool(
+                    audio_path and audio_mode in {'embedded', 'sync'}
                 ),
             },
         }

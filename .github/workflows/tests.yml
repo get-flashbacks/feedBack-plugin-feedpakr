@@ -1,0 +1,41 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feedpakr
+        uses: actions/checkout@v4
+        with:
+          path: feedBack-plugin-feedpakr
+          persist-credentials: false
+      - name: Check out feedBack host libraries
+        uses: actions/checkout@v4
+        with:
+          repository: get-flashbacks/feedBack
+          path: pakr/feedBack
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            feedBack-plugin-feedpakr/requirements.txt
+            pakr/feedBack/requirements.txt
+      - name: Install test dependencies
+        run: >-
+          python -m pip install pytest
+          -r feedBack-plugin-feedpakr/requirements.txt
+          -r pakr/feedBack/requirements.txt
+      - name: Run tests
+        working-directory: feedBack-plugin-feedpakr
+        run: python -m pytest -q

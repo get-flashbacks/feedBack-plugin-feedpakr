@@ -33,7 +33,7 @@ Plugin id: `feedpakr`. Install into `plugins/feedpakr/` (folder name must match 
 | Lyrics | **Fixed** (GPIF), **approximated** (GP3-5, labeled as such) | GPIF vocal track's own `<vocals>` XML (exact timing); GP3-5's single per-measure `song.lyrics` blob has no per-syllable timing to work with |
 | Vocal pitch | **New capability** (GPIF only) | Read directly from the same `<vocals>` XML's `note=` attribute |
 | Drums | **Promoted to real drum arrangements** (GP3-5 only) | `gp2rs.convert_drum_track_to_drumtab` → `type: drums` + `drum_tab.json`, instead of the legacy string\*24+fret fretted encoding. GPIF drums have no host-side equivalent yet, so they stay fret-encoded |
-| Piano notation | **New capability** (GPIF keys tracks) | `notation_<id>.json` via `gp2notation.convert_track_to_notation`; single-hand only, no LH/RH two-stave merge yet |
+| Standard notation | **New capability** (GPIF melodic tracks) | Per-track opt-in `notation_<id>.json` via `gp2notation.convert_track_to_notation`; enabled by default for keys, single-hand only |
 | Repeats/D.S./D.C./Coda | **Fixed** (GP3-5), **known limitation** (GPIF) | gp2rs already expands these; gp2rs_gpx doesn't yet (host TODO) — feedpakr detects repeat/volta markup up front and warns rather than silently shipping drifted timing |
 | Rigs/gear chains, harmony | Out of scope | GP carries no rig/signal-chain data; harmony (chord *intent* vs. what's played) needs separate work |
 
@@ -67,7 +67,8 @@ After a successful import or upgrade, the result panel offers **Generate Preview
 **Split Stems** buttons when those plugins are installed (probed via their own REST
 endpoints — feedpakr never generates a preview or splits stems itself, it only calls
 the dedicated plugins that own those features). Buttons for a plugin that isn't
-installed simply don't appear.
+installed simply don't appear. Split Stems is only offered for embedded or synced
+recordings, not synthesized or audio-free builds.
 
 ## Why
 
@@ -79,7 +80,7 @@ put it there, without needing any changes to the feedBack core.
 ## Architecture
 
 - `routes.py` — thin FastAPI routes (upload / upload-cover / upload-audio /
-  youtube-audio / autosync-preview / `WS build` / `sloppaks` / `WS upgrade`), following
+  youtube-audio / autosync-preview / `WS build` / `validate` / `sloppaks` / `WS upgrade`), following
   the upload-token / streaming-build pattern used by `feedBack-plugin-musicxml-import`.
 - `feedpakr_pipeline.py` — orchestrates parsing, conversion (via the host's `gp2rs` /
   `gp2rs_gpx` / `song`), and all fidelity enrichment (capo, timeline, lyrics, keys,
@@ -92,7 +93,7 @@ put it there, without needing any changes to the feedBack core.
 - `feedpakr_tones.py` — tone-change extraction for both source families.
 - `feedpakr_keys.py` — key/scale extraction (`keys.json`) for both source families.
 - `feedpakr_handshapes.py` — hand-shape derivation from chord data.
-- `feedpakr_notation.py` — GPIF keys/piano track notation sidecars.
+- `feedpakr_notation.py` — opt-in GPIF melodic-track notation sidecars.
 - `feedpakr_upgrade.py` — the `.sloppak` → `.feedpak` batch upgrade path (see above).
   Reads via the host's `sloppak.load_manifest`/`read_member_bytes` when available, with a
   small standalone YAML/zip fallback so its tests don't require the host lib either.
@@ -100,7 +101,8 @@ put it there, without needing any changes to the feedBack core.
   pyguitarpro dependency — easy to unit test.
 - `feedpakr_validate.py` — validates every payload shape (manifest, arrangement,
   song_timeline, keys, vocal_pitch, drum_tab, notation) against the vendored feedpak-spec
-  schemas, always returning a report rather than raising.
+  schemas, always returning a report rather than raising. The validation route accepts
+  a DLC-relative `.feedpak` path for checking existing packs without rebuilding them.
 
 Handoffs to `song-preview`/`stem-splitter` live entirely in `screen.js` (`fprProbeHandoffs`
 / `fprRunHandoff`) — both plugins expose same-origin REST endpoints, so there's nothing

@@ -65,8 +65,11 @@ def test_preserves_unknown_top_level_keys(tmp_path):
 
 
 def test_copies_all_files_verbatim(tmp_path):
-    src = _write_sloppak(tmp_path, {'title': 'T', 'artist': 'A', 'duration': 10.0,
-                                     'stems': [{'id': 'full', 'file': 'stems/full.ogg'}], 'arrangements': []})
+    src = _write_sloppak(tmp_path, {
+        'title': 'T', 'artist': 'A', 'duration': 10.0,
+        'stems': [{'id': 'full', 'file': 'stems/full.ogg'}], 'arrangements': [],
+        'stem_separation': {'engine': 'demucs', 'model': 'htdemucs', 'version': '1.0.0'},
+    })
     (src / 'stems').mkdir()
     (src / 'stems' / 'full.ogg').write_bytes(b'\x00\x01\x02fake-audio')
     (src / 'cover.png').write_bytes(b'\x89PNGfake')
@@ -75,6 +78,37 @@ def test_copies_all_files_verbatim(tmp_path):
     with _unzip(result['bytes']) as zf:
         assert zf.read('stems/full.ogg') == b'\x00\x01\x02fake-audio'
         assert zf.read('cover.png') == b'\x89PNGfake'
+    assert result['features']['real_audio'] is True
+
+
+def test_midi_rendered_single_stem_disables_real_audio_feature(tmp_path):
+    src = _write_sloppak(tmp_path, {
+        'title': 'T', 'artist': 'A', 'duration': 10.0,
+        'stems': [{'id': 'full', 'file': 'stems/full.ogg'}],
+        'arrangements': [],
+    })
+    (src / 'stems').mkdir()
+    (src / 'stems' / 'full.ogg').write_bytes(b'midi-rendered-audio')
+
+    result = upgrade.upgrade_sloppak(str(src))
+
+    assert result['features']['real_audio'] is False
+
+
+def test_upgrade_without_complete_mix_disables_real_audio_feature(tmp_path):
+    src = _write_sloppak(tmp_path, {
+        'title': 'T', 'artist': 'A', 'duration': 10.0,
+        'stems': [
+            {'id': 'guitar', 'file': 'stems/guitar.ogg'},
+            {'id': 'bass', 'file': 'stems/bass.ogg'},
+        ],
+        'arrangements': [],
+    })
+    (src / 'stems').mkdir()
+    (src / 'stems' / 'guitar.ogg').write_bytes(b'guitar')
+    (src / 'stems' / 'bass.ogg').write_bytes(b'bass')
+    result = upgrade.upgrade_sloppak(str(src))
+    assert result['features']['real_audio'] is False
 
 
 # ── song_timeline promotion ─────────────────────────────────────────────────

@@ -81,14 +81,19 @@ def autosync_audio(gp_path: str, audio_path: str, progress_cb=None):
 
 
 def get_audio_duration(audio_path: str) -> float | None:
-    """Get audio duration in seconds using ffprobe. Returns None on failure."""
+    """Get the duration of an audio file in seconds using ffprobe.
+    Returns None on any error (file not found, ffprobe unavailable, etc.)."""
+    if not audio_path or not Path(audio_path).exists():
+        return None
     try:
         result = subprocess.run(
-            ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
-             '-of', 'default=noprint_wrappers=1:nokey=1:nokey=1', str(audio_path)],
-            capture_output=True, text=True, timeout=10,
+            [
+                'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1', str(audio_path)
+            ],
+            capture_output=True, timeout=10, text=True,
         )
-        if result.returncode == 0:
+        if result.returncode == 0 and result.stdout.strip():
             return float(result.stdout.strip())
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
         pass
@@ -98,9 +103,12 @@ def get_audio_duration(audio_path: str) -> float | None:
 def transcode_to_ogg(src_path: str, out_path: str, timeout: int = 120):
     """Normalize an arbitrary user-supplied/fetched audio file to OGG so
     every non-embedded, non-synthesized stem meets the feedpak-spec
-    baseline codec requirement (OGG/WAV MUST). Returns (path, error)."""
+    baseline codec requirement. The spec allows both OGG and WAV per §5.3.2,
+    but browsers reliably support only OGG — so WAV inputs are transcoded to
+    OGG for maximum compatibility (spec-valid, browser-compatible). Returns
+    (path, error)."""
     src = Path(src_path)
-    if src.suffix.lower() in ('.ogg', '.wav'):
+    if src.suffix.lower() == '.ogg':
         return str(src), None
     try:
         result = subprocess.run(
@@ -147,13 +155,19 @@ def download_youtube_audio(url: str, out_dir: str, timeout: int = 300):
     ogg_path = Path(out_dir) / 'youtube_audio.ogg'
     if ogg_path.exists():
         return str(ogg_path), None
-    # yt_dlp/ffmpeg unavailable postprocessor fallback — only accept completed
-    # downloads, exclude .part and .ytdl files from incomplete/aborted downloads.
-    VALID_AUDIO_FORMATS = {'.mp3', '.m4a', '.wav', '.webm', '.mkv', '.flv'}
-    candidates = [
-        p for p in Path(out_dir).glob('youtube_audio.*')
-        if p.suffix.lower() in VALID_AUDIO_FORMATS
-    ]
+    # yt_dlp/ffmpeg unavailable postprocessor fallback — whatever extension
+    # landed, still usable (transcode_to_ogg normalizes it downstream).
+    # Only match completed files; exclude .part/.ytdl (in-progress/aborted downloads).
+    candidates = _completed_youtube_downloads(out_dir)
     if candidates:
         return str(candidates[0]), None
     return None, 'Download completed but no audio file was found.'
+
+
+def _completed_youtube_downloads(out_dir: str | Path) -> list[Path]:
+    """Return completed yt-dlp fallback files, excluding partial metadata."""
+    completed_suffixes = {'.mp3', '.m4a', '.wav', '.webm', '.mkv', '.flv'}
+    return [
+        path for path in Path(out_dir).glob('youtube_audio.*')
+        if path.suffix.lower() in completed_suffixes
+    ]

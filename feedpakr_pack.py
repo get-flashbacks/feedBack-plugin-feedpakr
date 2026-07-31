@@ -62,11 +62,19 @@ def assemble_manifest(
     title: str,
     artist: str,
     album: str = '',
-    authors: list[str] | None = None,
     year: int | None = None,
+    album_artist: str = '',
+    track: int | None = None,
+    disc: int | None = None,
+    genres: list[str] | None = None,
+    mbid: str = '',
+    isrc: str = '',
+    language: str = '',
+    authors: list[str] | None = None,
     duration: float,
     arrangements: list[dict],
     stem_file: str | None,
+    cover_file: str | None = None,
     song_timeline_present: bool = False,
     lyrics_present: bool = False,
     keys_present: bool = False,
@@ -76,7 +84,20 @@ def assemble_manifest(
 
     stem_file is the manifest-relative path of the packed full mixdown
     (e.g. "stems/full.ogg" or "stems/full.wav"), or None when no audio
-    could be produced.
+    could be produced. cover_file is the manifest-relative path of the
+    packed cover image (e.g. "cover.jpg"), or None when there isn't one —
+    per spec §2.2 ("nothing is auto-discovered by scanning; a Reader MUST
+    NOT rely on filename"), writing cover.jpg into the zip without also
+    pointing the manifest's `cover` key at it means a compliant Reader
+    never surfaces it, even though the bytes are right there.
+
+    album_artist/track/disc/genres/mbid/isrc/language/authors are all
+    optional, schema-valid top-level manifest keys (spec §5.1/§5.4) —
+    editable in the editor plugin's create-modal but, until now, never
+    exposed anywhere in feedpakr's own import flow. `authors` here is a
+    flat list of names (the UI's "who charted this" field); each becomes
+    an `{name}` object per spec §5.4 — role/email/url aren't collected
+    here, so they're simply omitted rather than sent empty.
     """
     manifest: dict = {
         'feedpak_version': FEEDPAK_VERSION,
@@ -85,10 +106,25 @@ def assemble_manifest(
     }
     if album:
         manifest['album'] = album
-    if authors:
-        manifest['authors'] = authors
     if year:
         manifest['year'] = int(year)
+    if album_artist:
+        manifest['album_artist'] = album_artist
+    if track:
+        manifest['track'] = int(track)
+    if disc:
+        manifest['disc'] = int(disc)
+    if genres:
+        manifest['genres'] = list(genres)
+    if mbid:
+        manifest['mbid'] = mbid
+    if isrc:
+        manifest['isrc'] = isrc
+    if language:
+        manifest['language'] = language
+    normalized_authors = [name.strip() for name in (authors or []) if name.strip()]
+    if normalized_authors:
+        manifest['authors'] = [{'name': name} for name in normalized_authors]
     manifest['duration'] = float(duration)
     manifest['arrangements'] = arrangements
 
@@ -102,6 +138,8 @@ def assemble_manifest(
         [{'id': 'full', 'file': stem_file, 'default': True}]
         if stem_file else []
     )
+    if cover_file:
+        manifest['cover'] = cover_file
 
     if song_timeline_present:
         manifest['song_timeline'] = 'song_timeline.json'
