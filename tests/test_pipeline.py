@@ -234,6 +234,32 @@ def test_build_feedpak_gpif_vocal_track_becomes_lyrics_not_arrangement():
 
 
 @gp8_fixture_available
+def test_build_feedpak_gpif_drums_become_type_drums_arrangement():
+    result = pipeline.build_feedpak(
+        str(MONEY_GP8),
+        track_indices=[1, 6],  # guitar, drums
+        arrangement_names={1: 'Lead', 6: 'Drums'},
+        audio_mode='none',
+        report=lambda stage, pct: None,
+    )
+
+    import io
+    import json
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
+        manifest = yaml.safe_load(zf.read('manifest.yaml'))
+        drums_entry = next(a for a in manifest['arrangements'] if a['name'] == 'Drums')
+        assert drums_entry['type'] == 'drums'
+        assert 'file' not in drums_entry
+        drum_tab = json.loads(zf.read(drums_entry['drum_tab']))
+
+    assert drum_tab['hits']
+    assert drum_tab['kit']
+    assert result['features']['drum_arrangements'] == 1
+    assert not any(name.startswith('drum_tab_') for name in result['validation'])
+
+
+@gp8_fixture_available
 def test_gpif_capo_lookup_reads_capo_fret():
     """GPIF capo lives at Track/Staves/Staff/Properties/Property[@name=
     'CapoFret']/Fret — neither gp2rs nor gp2rs_gpx read it on their own

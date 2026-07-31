@@ -225,6 +225,116 @@ def _gpif_has_repeat_markup(gp_path: str) -> bool:
         return False
 
 
+def _gpif_drumtab_from_wire(wire: dict, arrangement_name: str) -> tuple[dict, dict[int, int]]:
+    """Turn gp2rs_gpx's lossless percussion MIDI encoding into drum-tab.
+
+    gp2rs_gpx represents every GPIF drum hit as ``string = midi // 24`` and
+    ``fret = midi % 24`` in its intermediate arrangement XML.  Decode that
+    carrier here and route the MIDI note through the host's canonical drum
+    vocabulary.  Velocity/ghost/flam are not present in the intermediate XML,
+    so those optional drum-tab fields are deliberately omitted rather than
+    fabricated.
+    """
+    import drums as drums_mod
+
+    hits: list[dict] = []
+    pieces_seen: dict[str, str] = {}
+    unmapped: dict[int, int] = {}
+
+    def add_hit(note: dict, time: float) -> None:
+        try:
+            midi = int(note['s']) * 24 + int(note['f'])
+        except (KeyError, TypeError, ValueError):
+            return
+        piece = drums_mod.midi_to_piece(midi)
+        if piece is None:
+            unmapped[midi] = unmapped.get(midi, 0) + 1
+            return
+        hits.append({'t': round(float(time), 3), 'p': piece})
+        pieces_seen.setdefault(piece, piece.replace('_', ' ').title())
+
+    for note in wire.get('notes', []):
+        add_hit(note, note.get('t', 0.0))
+    for chord in wire.get('chords', []):
+        for note in chord.get('notes', []):
+            add_hit(note, chord.get('t', 0.0))
+
+    hits.sort(key=lambda hit: hit['t'])
+    return ({
+        'version': 1,
+        'name': arrangement_name,
+        'kit': [{'id': piece, 'name': label} for piece, label in pieces_seen.items()],
+        'hits': hits,
+    }, unmapped)
+
+
+def _gpif_played_chord_names(root, track: dict) -> dict[tuple, str]:
+    """Map played fret shapes to the chord names displayed by Guitar Pro.
+
+    GPIF's DiagramCollection is not necessarily a voicing dictionary.  In
+    real GP8 files, items with ``ShowDiagram=false`` often all contain the
+    same placeholder frets; the authoritative association is the beat's
+    ``<Chord>item-id</Chord>`` reference.  Rebuild the played shape from that
+    beat's notes so it keys exactly like gp2rs_gpx's emitted templates.
+    """
+    items = {
+        item.get('id'): (item.get('name') or '').strip()
+        for item in track['_el'].findall(
+            './/Property[@name="DiagramCollection"]/Items/Item')
+    }
+    if not any(items.values()):
+        return {}
+
+    masterbars = list(root.find('MasterBars') or [])
+    bars = {el.get('id'): el for el in (root.find('Bars') or [])}
+    voices = {el.get('id'): el for el in (root.find('Voices') or [])}
+    beats = {el.get('id'): el for el in (root.find('Beats') or [])}
+    notes = {el.get('id'): el for el in (root.find('Notes') or [])}
+    names_by_shape: dict[tuple, str] = {}
+
+    for column, pitches in zip(track['stave_columns'], track['stave_pitches']):
+        order = sorted(range(len(pitches)), key=lambda i: (pitches[i], i))
+        for masterbar in masterbars:
+            bar_ids = masterbar.findtext('Bars', '').split()
+            if column >= len(bar_ids):
+                continue
+            bar = bars.get(bar_ids[column])
+            if bar is None:
+                continue
+            for voice_id in bar.findtext('Voices', '').split():
+                voice = voices.get(voice_id)
+                if voice is None:
+                    continue
+                for beat_id in voice.findtext('Beats', '').split():
+                    beat = beats.get(beat_id)
+                    if beat is None:
+                        continue
+                    chord_name = items.get((beat.findtext('Chord') or '').strip(), '')
+                    if not chord_name:
+                        continue
+                    played: dict[int, int] = {}
+                    for note_id in beat.findtext('Notes', '').split():
+                        note = notes.get(note_id)
+                        if note is None or gp2rs_gpx._note_is_tie(note):
+                            continue
+                        props = {p.get('name'): p for p in note.findall('.//Property')}
+                        try:
+                            gp_string = int(props['String'].findtext('String'))
+                            fret = int(props['Fret'].findtext('Fret'))
+                            rs_string = order.index(gp_string)
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        played[rs_string] = fret
+                    if not played:
+                        continue
+                    width = max(6, max(played) + 1)
+                    frets = [-1] * width
+                    for string, fret in played.items():
+                        frets[string] = fret
+                    names_by_shape.setdefault(tuple(frets), chord_name)
+    return names_by_shape
+
+
 # ── Track ordering (needed to map an output XML back to its GP track) ──────
 
 def _output_track_order(gp_path: str, track_indices: list[int], names: dict[int, str]) -> list[int]:
@@ -398,6 +508,8 @@ def build_feedpak(
         use_album = (album or '').strip() or parsed['album']
 
         gp_song = None if is_gpif else guitarpro.parse(gp_path)
+        gpif_root = gp2rs_gpx._load_gpif(gp_path) if is_gpif else None
+        gpif_tracks = gp2rs_gpx._gpif_tracks(gpif_root) if is_gpif else []
         gpif_capo = _gpif_capo_lookup(gp_path) if is_gpif else {}
 
         names = {idx: arrangement_names.get(idx, '') for idx in track_indices}
@@ -442,13 +554,10 @@ def build_feedpak(
             )
             output_order = [None] * len(xml_paths)
 
-        # Drums-as-arrangements (spec 1.17.0) needs gp2rs.convert_drum_track_to_drumtab,
-        # which has no gp2rs_gpx equivalent — GPIF drum tracks stay on the
-        # legacy fretted (string*24+fret) encoding gp2rs_gpx already wrote.
-        drum_indices: set[int] = (
-            set() if is_gpif else
-            {t['index'] for t in parsed['tracks'] if t['is_drums'] and t['index'] in track_indices}
-        )
+        drum_indices: set[int] = {
+            t['index'] for t in parsed['tracks']
+            if t['is_drums'] and t['index'] in track_indices
+        }
 
         gp345_tones = None
         if not is_gpif and gp_song is not None:
@@ -479,7 +588,7 @@ def build_feedpak(
                     warnings.append(f'Lyrics extraction failed for a vocal track: {e}')
                 continue
 
-            if idx is not None and idx in drum_indices:
+            if idx is not None and idx in drum_indices and not is_gpif:
                 try:
                     drum_name = names.get(idx) or 'Drums'
                     drum_tab = gp2rs.convert_drum_track_to_drumtab(
@@ -520,6 +629,46 @@ def build_feedpak(
                 arr.capo = gpif_capo.get(idx, 0) if is_gpif else _capo_for_track(gp_song, idx)
 
             wire = song_mod.arrangement_to_wire(arr)
+
+            if is_gpif and idx is not None:
+                try:
+                    chord_names = _gpif_played_chord_names(gpif_root, gpif_tracks[idx])
+                    for template in wire.get('templates', []):
+                        name = chord_names.get(tuple(template.get('frets', [])))
+                        if name:
+                            template['name'] = name
+                            template['displayName'] = name
+                except Exception as e:
+                    warnings.append(f'Chord-name extraction failed for {arr.name}: {e}')
+
+            if idx is not None and idx in drum_indices:
+                try:
+                    drum_name = names.get(idx) or arr.name or 'Drums'
+                    drum_tab, unmapped = _gpif_drumtab_from_wire(wire, drum_name)
+                    if not drum_tab['hits']:
+                        raise ValueError('no supported drum hits were decoded')
+                    arr_id = pack.arrangement_id_for(drum_name, taken_ids)
+                    dt_filename = f'drum_tab_{arr_id}.json'
+                    drum_tab_files[dt_filename] = drum_tab
+                    arrangement_entries.append({
+                        'id': arr_id,
+                        'name': drum_name,
+                        'type': 'drums',
+                        'drum_tab': dt_filename,
+                    })
+                    if unmapped:
+                        count = sum(unmapped.values())
+                        midis = ', '.join(str(m) for m in sorted(unmapped))
+                        warnings.append(
+                            f'{count} unsupported percussion hit(s) in "{drum_name}" '
+                            f'were skipped (MIDI: {midis}).'
+                        )
+                    continue
+                except Exception as e:
+                    warnings.append(
+                        'GPIF drum-tab conversion failed for a track, falling back '
+                        f'to fretted encoding: {e}'
+                    )
 
             if not wire.get('handshapes') and wire.get('chords'):
                 try:
@@ -654,7 +803,6 @@ def build_feedpak(
         if song_timeline and song_timeline.get('beats'):
             try:
                 if is_gpif:
-                    gpif_root = gp2rs_gpx._load_gpif(gp_path)
                     keys_data = keys_mod.extract_gpif_keys(gpif_root, song_timeline['beats'])
                 elif gp_song is not None:
                     keys_data = keys_mod.extract_gp345_keys(gp_song, song_timeline['beats'])
