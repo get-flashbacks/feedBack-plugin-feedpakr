@@ -67,6 +67,20 @@ def test_assemble_manifest_omits_optional_keys_when_absent():
     assert 'cover' not in manifest
 
 
+def test_assemble_manifest_normalizes_authors():
+    manifest = pack.assemble_manifest(
+        title='T', artist='A', duration=10.0, arrangements=[], stem_file=None,
+        authors=[' Alice ', '   ', '', 'Bob'],
+    )
+    assert manifest['authors'] == [{'name': 'Alice'}, {'name': 'Bob'}]
+
+    blank = pack.assemble_manifest(
+        title='T', artist='A', duration=10.0, arrangements=[], stem_file=None,
+        authors=[' ', '\t'],
+    )
+    assert 'authors' not in blank
+
+
 def test_assemble_manifest_includes_cover_when_present():
     """Regression test: write_feedpak_zip happily writes cover.jpg into the
     zip given a cover_path, but per spec §2.2 ("nothing is auto-discovered

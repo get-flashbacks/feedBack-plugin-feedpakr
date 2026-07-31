@@ -75,6 +75,23 @@ def test_copies_all_files_verbatim(tmp_path):
     with _unzip(result['bytes']) as zf:
         assert zf.read('stems/full.ogg') == b'\x00\x01\x02fake-audio'
         assert zf.read('cover.png') == b'\x89PNGfake'
+    assert result['features']['real_audio'] is True
+
+
+def test_upgrade_without_complete_mix_disables_real_audio_feature(tmp_path):
+    src = _write_sloppak(tmp_path, {
+        'title': 'T', 'artist': 'A', 'duration': 10.0,
+        'stems': [
+            {'id': 'guitar', 'file': 'stems/guitar.ogg'},
+            {'id': 'bass', 'file': 'stems/bass.ogg'},
+        ],
+        'arrangements': [],
+    })
+    (src / 'stems').mkdir()
+    (src / 'stems' / 'guitar.ogg').write_bytes(b'guitar')
+    (src / 'stems' / 'bass.ogg').write_bytes(b'bass')
+    result = upgrade.upgrade_sloppak(str(src))
+    assert result['features']['real_audio'] is False
 
 
 # ── song_timeline promotion ─────────────────────────────────────────────────

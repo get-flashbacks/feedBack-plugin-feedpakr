@@ -16,11 +16,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: feedBack-plugin-feedpakr
+          persist-credentials: false
       - name: Check out feedBack host libraries
         uses: actions/checkout@v4
         with:
           repository: get-flashbacks/feedBack
           path: pakr/feedBack
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

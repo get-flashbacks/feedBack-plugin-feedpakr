@@ -141,7 +141,7 @@ def test_build_feedpak_without_audio_warns_authoring_intermediate():
 
 
 @fixture_available
-def test_build_feedpak_feeds_resolved_audio_offset_into_convert_file(monkeypatch):
+def test_build_feedpak_feeds_resolved_audio_offset_into_convert_file(monkeypatch, tmp_path):
     """Regression test: audio_offset used to be resolved AFTER convert_file
     ran and was never fed back in — 'embedded'/'sync' mode's real offset
     (GP8 lead-in, or autosync alignment) was silently discarded, since
@@ -149,10 +149,13 @@ def test_build_feedpak_feeds_resolved_audio_offset_into_convert_file(monkeypatch
     pipeline (feedpakr_pack.py has none) for it to land in instead. Locks
     in the fix: whatever _resolve_audio returns must reach convert_file's
     own audio_offset kwarg, the only place that actually shifts note times."""
+    audio_path = tmp_path / 'audio.ogg'
+    audio_path.write_bytes(b'OggS')
     monkeypatch.setattr(
         pipeline, '_resolve_audio',
-        lambda *a, **k: (None, 1.75),
+        lambda *a, **k: (str(audio_path), 1.75),
     )
+    monkeypatch.setattr(pipeline.audio_mod, 'get_audio_duration', lambda _path: None)
 
     captured = {}
     real_convert_file = pipeline.gp2rs.convert_file
@@ -171,6 +174,22 @@ def test_build_feedpak_feeds_resolved_audio_offset_into_convert_file(monkeypatch
         report=lambda stage, pct: None,
     )
     assert captured['audio_offset'] == 1.75
+
+
+@fixture_available
+def test_build_feedpak_rejects_failed_requested_audio(monkeypatch):
+    monkeypatch.setattr(
+        pipeline, '_resolve_audio',
+        lambda *a, **k: (None, 0.0),
+    )
+    with pytest.raises(RuntimeError, match='Audio could not be produced'):
+        pipeline.build_feedpak(
+            str(MONEY_GP5),
+            track_indices=[3],
+            arrangement_names={3: 'Bass'},
+            audio_mode='midi',
+            report=lambda stage, pct: None,
+        )
 
 
 # ── GPIF (.gp / .gpx, GP6/7/8) ────────────────────────────────────────────

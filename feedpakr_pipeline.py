@@ -417,6 +417,9 @@ def build_feedpak(
         audio_path, audio_offset = _resolve_audio(
             gp_path, track_indices, audio_mode, user_audio_path, tmp_dir, warnings, report,
         )
+        if audio_mode != 'none' and audio_path is None:
+            detail = warnings[-1] if warnings else 'Audio could not be produced.'
+            raise RuntimeError(detail)
 
         report('Converting tracks to arrangement XML…', 20)
         xml_dir = tmp_dir / 'xml'

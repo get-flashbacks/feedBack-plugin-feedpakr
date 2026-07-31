@@ -267,6 +267,7 @@ def upgrade_sloppak(sloppak_path: str) -> dict:
         warnings.append(f'{part}: {len(errs)} schema issue(s) — see validation report.')
 
     buf = io.BytesIO()
+    written_members: set[str] = set()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(
             'manifest.yaml',
@@ -280,6 +281,15 @@ def upgrade_sloppak(sloppak_path: str) -> dict:
                 warnings.append(f'Could not read {rel!r} from the source pack — omitted from the upgrade.')
                 continue
             zf.writestr(rel, raw)
+            written_members.add(rel)
+
+    real_audio = any(
+        str(stem.get('id')) == 'full'
+        and isinstance(stem.get('file'), str)
+        and stem['file'] in written_members
+        for stem in (new_manifest.get('stems') or [])
+        if isinstance(stem, dict)
+    )
 
     return {
         'bytes': buf.getvalue(),
@@ -287,4 +297,5 @@ def upgrade_sloppak(sloppak_path: str) -> dict:
         'validation': validation,
         'title': new_manifest.get('title', ''),
         'artist': new_manifest.get('artist', ''),
+        'features': {'real_audio': real_audio},
     }

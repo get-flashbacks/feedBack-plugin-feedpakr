@@ -245,7 +245,7 @@ def setup(app, context):
         dest = entry['dir'] / f'caa_{tag}{cover_id}.jpg'
         if dest.exists() and dest.stat().st_size > 100:
             return dest
-        data = await asyncio.get_event_loop().run_in_executor(
+        data = await asyncio.get_running_loop().run_in_executor(
             None, _caa_fetch_front, cover_id, 500, kind)
         if data is None:
             return None
@@ -301,7 +301,7 @@ def setup(app, context):
         album first."""
         if not (artist.strip() or query.strip()):
             return {'covers': []}
-        covers = await asyncio.get_event_loop().run_in_executor(
+        covers = await asyncio.get_running_loop().run_in_executor(
             None, _mb_release_group_covers, artist.strip(), query.strip())
         return {'covers': covers}
 
@@ -432,6 +432,8 @@ def setup(app, context):
                 to gp2rs's own auto-naming.
         year/track_num/disc: plain integers, or empty when unset.
         genres/authors: comma-separated lists.
+        notation_tracks: literal "default" uses the pipeline default; any
+                other value is a comma-separated list of track indices.
         audio_mode: "midi" (GP3-5 FluidSynth synthesis), "embedded" (GP8's
                 own backing track), "sync" (a user-uploaded or YouTube-
                 fetched recording, aligned via autosync — needs
@@ -539,9 +541,16 @@ def setup(app, context):
         disc_val = _int_or_none(disc)
         genres_list = [g.strip() for g in genres.split(',') if g.strip()]
         authors_list = [a.strip() for a in authors.split(',') if a.strip()]
-        notation_indices = None if notation_tracks == 'default' else {
-            int(value) for value in notation_tracks.split(',') if value.strip()
-        }
+        try:
+            notation_indices = None if notation_tracks == 'default' else {
+                int(value) for value in notation_tracks.split(',') if value.strip()
+            }
+        except ValueError:
+            await websocket.send_json({
+                'error': 'notation_tracks must be "default" or comma-separated integers',
+            })
+            await websocket.close()
+            return
 
         progress_queue: asyncio.Queue = asyncio.Queue()
 
@@ -737,6 +746,7 @@ def setup(app, context):
                         'output_rel': rel_out,
                         'warnings': result['warnings'],
                         'valid': not result['validation'],
+                        'features': result['features'],
                     })
                 except Exception as e:
                     _log.exception('feedpakr: upgrade failed for %r', rel)

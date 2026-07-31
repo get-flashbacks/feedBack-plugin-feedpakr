@@ -417,7 +417,7 @@ async function fprBuild() {
         upload_id: _uploadId, tracks, names, title, artist, album,
         album_artist: albumArtist, year, track_num: track, disc,
         genres, language, isrc, mbid, authors,
-        notation_tracks: notation,
+        notation_tracks: _format === 'gpif' ? notation : 'default',
         audio_mode: audioMode,
     });
     const ws = new WebSocket(`${WS_BASE}/build?${params}`);
@@ -779,7 +779,7 @@ function fprShowUpgradeResults(results) {
         return `<div class="py-2 border-b border-gray-800 last:border-0">
             <p class="text-sm text-gray-300">${esc(r.output)} ${badge}</p>
             ${warns}
-            ${fprHandoffButtonsHtml(r.output_rel)}
+            ${fprHandoffButtonsHtml(r.output_rel, !!r.features?.real_audio)}
         </div>`;
     }).join('');
 

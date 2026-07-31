@@ -122,8 +122,9 @@ def assemble_manifest(
         manifest['isrc'] = isrc
     if language:
         manifest['language'] = language
-    if authors:
-        manifest['authors'] = [{'name': a} for a in authors if a]
+    normalized_authors = [name.strip() for name in (authors or []) if name.strip()]
+    if normalized_authors:
+        manifest['authors'] = [{'name': name} for name in normalized_authors]
     manifest['duration'] = float(duration)
     manifest['arrangements'] = arrangements
 

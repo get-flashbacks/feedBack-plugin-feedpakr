@@ -119,3 +119,37 @@ def test_validate_feedpak_file_reports_missing_reference(tmp_path):
         zf.writestr('manifest.yaml', yaml.safe_dump(_valid_manifest()))
     report = validate.validate_feedpak_file(path)
     assert report['arrangements/lead.json'] == ['<root>: referenced file is missing']
+
+
+def test_validate_feedpak_file_reports_missing_manifest(tmp_path):
+    path = tmp_path / 'missing-manifest.feedpak'
+    with zipfile.ZipFile(path, 'w'):
+        pass
+    assert validate.validate_feedpak_file(path) == {
+        'manifest.yaml': ['<root>: manifest file is missing'],
+    }
+
+
+def test_validate_feedpak_file_reports_non_object_manifest(tmp_path):
+    path = tmp_path / 'list-manifest.feedpak'
+    with zipfile.ZipFile(path, 'w') as zf:
+        zf.writestr('manifest.yaml', '- not\n- an object\n')
+    assert validate.validate_feedpak_file(path) == {
+        'manifest.yaml': ['<root>: manifest must be an object'],
+    }
+
+
+def test_validate_feedpak_file_reports_unparsable_json_sidecar(tmp_path):
+    path = tmp_path / 'malformed-sidecar.feedpak'
+    with zipfile.ZipFile(path, 'w') as zf:
+        zf.writestr('manifest.yaml', yaml.safe_dump(_valid_manifest()))
+        zf.writestr('arrangements/lead.json', '{not json')
+    report = validate.validate_feedpak_file(path)
+    assert report['arrangements/lead.json'][0].startswith('<root>: could not parse JSON:')
+
+
+def test_validate_feedpak_file_raises_for_corrupt_archive(tmp_path):
+    path = tmp_path / 'corrupt.feedpak'
+    path.write_bytes(b'not a zip')
+    with pytest.raises(zipfile.BadZipFile):
+        validate.validate_feedpak_file(path)

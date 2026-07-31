@@ -93,7 +93,7 @@ def validate_pack(
     for filename, payload in arrangement_files.items():
         errs = validate_arrangement(payload)
         if errs:
-            report[f'arrangements/{filename}'] = errs
+            report[filename if filename.startswith('arrangements/') else f'arrangements/{filename}'] = errs
 
     if song_timeline is not None:
         errs = validate_song_timeline(song_timeline)
@@ -166,7 +166,7 @@ def validate_feedpak_file(path: str | Path) -> dict[str, list[str]]:
             rel = entry.get('file')
             payload = read_json(rel) if isinstance(rel, str) else None
             if payload is not None:
-                arrangements[rel.removeprefix('arrangements/')] = payload
+                arrangements[rel] = payload
             for key, dest in (('drum_tab', drum_tabs), ('notation', notations)):
                 side_rel = entry.get(key)
                 side_payload = read_json(side_rel) if isinstance(side_rel, str) else None
