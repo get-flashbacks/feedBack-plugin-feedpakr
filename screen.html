@@ -61,6 +61,60 @@
                 <input type="text" id="fpr-album"
                     class="w-full bg-dark-600 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-accent/50">
             </div>
+
+            <!-- Extended metadata (feedpak spec §5.1) — same field set as the
+                 editor plugin's create-modal "Song details" panel, collapsed
+                 by default since most imports only need title/artist/album. -->
+            <details class="mt-3">
+                <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-300">More details (optional)</summary>
+                <div class="grid grid-cols-2 gap-4 mt-3">
+                    <div>
+                        <label class="text-xs text-gray-400 mb-1 block">Album artist</label>
+                        <input type="text" id="fpr-album-artist" placeholder="For compilations"
+                            class="w-full bg-dark-600 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-accent/50">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-400 mb-1 block">Year</label>
+                        <input type="text" id="fpr-year" placeholder="2025" inputmode="numeric"
+                            class="w-full bg-dark-600 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-accent/50">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-400 mb-1 block">Track #</label>
+                        <input type="text" id="fpr-track" placeholder="1" inputmode="numeric"
+                            class="w-full bg-dark-600 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-accent/50">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-400 mb-1 block">Disc #</label>
+                        <input type="text" id="fpr-disc" placeholder="1" inputmode="numeric"
+                            class="w-full bg-dark-600 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-accent/50">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-400 mb-1 block">Genre(s)</label>
+                        <input type="text" id="fpr-genres" placeholder="Rock, Metal"
+                            class="w-full bg-dark-600 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-accent/50">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-400 mb-1 block">Language</label>
+                        <input type="text" id="fpr-language" placeholder="en"
+                            class="w-full bg-dark-600 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-accent/50">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-400 mb-1 block">ISRC</label>
+                        <input type="text" id="fpr-isrc" placeholder="USABC2400001"
+                            class="w-full bg-dark-600 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-accent/50">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-400 mb-1 block">MusicBrainz ID</label>
+                        <input type="text" id="fpr-mbid" placeholder="recording MBID"
+                            class="w-full bg-dark-600 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-accent/50">
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <label class="text-xs text-gray-400 mb-1 block">Chart author(s)</label>
+                    <input type="text" id="fpr-authors" placeholder="Who charted this — separate names with commas"
+                        class="w-full bg-dark-600 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-accent/50">
+                </div>
+            </details>
         </div>
 
         <div class="bg-dark-700 border border-gray-800 rounded-xl p-5 mb-6">
@@ -105,10 +159,19 @@
                 <div id="fpr-sync-status" class="text-xs text-gray-500"></div>
             </div>
         </div>
-        <div class="mb-4">
-            <label class="text-xs text-gray-400 mb-1 block">Cover art (optional)</label>
+        <div class="bg-dark-700 border border-gray-800 rounded-xl p-5 mb-4">
+            <p class="text-xs text-gray-400 mb-3">Cover art (optional)</p>
             <input type="file" id="fpr-cover-input" accept=".jpg,.jpeg,.png,.webp"
-                class="text-xs text-gray-400">
+                class="text-xs text-gray-400 mb-3">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="text-xs text-gray-600">or search MusicBrainz for the album cover —</span>
+                <button onclick="fprSearchCover()"
+                    class="px-3 py-1 rounded-lg text-xs text-gray-300 bg-dark-600 hover:bg-dark-500 transition">
+                    Search
+                </button>
+            </div>
+            <div id="fpr-cover-status" class="text-xs text-gray-500 mb-2"></div>
+            <div id="fpr-cover-results" class="hidden gap-2"></div>
         </div>
 
         <div class="flex gap-3">

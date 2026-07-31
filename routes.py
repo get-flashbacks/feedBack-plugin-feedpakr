@@ -11,6 +11,19 @@ for the pattern this is deliberately consistent with):
   POST /api/plugins/feedpakr/upload-cover
     Attaches cover art to an existing upload token.
 
+  GET  /api/plugins/feedpakr/cover-search
+    Album-centric cover-art candidates from MusicBrainz release-groups
+    (studio albums first), for the art picker. Same mechanism as the
+    editor plugin's cover search.
+
+  GET  /api/plugins/feedpakr/caa-cover/{cover_id}
+    Serves a Cover Art Archive front cover, cached, same-origin (dodges
+    browser CORS + CSP for an external host).
+
+  POST /api/plugins/feedpakr/use-caa-cover
+    Picks a CAA cover as the upload token's cover art (fetch + cache,
+    same effect as upload-cover but sourced from the search results).
+
   POST /api/plugins/feedpakr/upload-audio
     Attaches a user-supplied audio recording to an existing upload token,
     for the "sync" audio mode (aligned to the chart via autosync at build
@@ -54,6 +67,7 @@ import time
 from pathlib import Path
 
 from fastapi import WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
 
 _get_dlc_dir = None
 _extract_meta = None
@@ -186,6 +200,139 @@ def setup(app, context):
         entry['cover_path'] = cover_path
         return {'ok': True}
 
+    # ── Cover Art Archive — album-art picker from MusicBrainz release-groups ──
+    # Ported from feedBack-plugin-editor's identical mechanism (routes.py's
+    # _mb_release_group_covers / caa-cover / use-caa-cover). Release-groups
+    # (not recording releases) carry reliable Album vs Live/Compilation
+    # typing, so searching by artist + album/title and preferring the studio
+    # album surfaces the canonical cover first. Cached per upload token's
+    # temp dir (cleaned up by the existing upload TTL) rather than a
+    # persistent STORAGE_DIR — feedpakr has no equivalent shared cache dir.
+    _CAA_ID_RE = re.compile(r'^[0-9a-fA-F-]{1,64}$')
+    _CAA_MAX_BYTES = 10 * 1024 * 1024
+    _CAA_UA = 'feedBack-feedpakr/1.0 ( https://github.com/got-feedBack/feedBack )'
+    _CAA_SECONDARY_SKIP = {'live', 'compilation', 'remix', 'dj-mix',
+                            'mixtape/street', 'demo', 'interview', 'audiobook',
+                            'spokenword'}
+
+    def _caa_fetch_front(cover_id: str, size: int = 500, kind: str = 'release'):
+        """Front cover (size px) for a MusicBrainz `kind` ('release' or
+        'release-group') from coverartarchive.org, or None on any error /
+        missing art. `cover_id` is regex-validated by callers before the URL."""
+        import urllib.request
+        url = f'https://coverartarchive.org/{kind}/{cover_id}/front-{size}'
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': _CAA_UA})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if getattr(resp, 'status', 200) != 200:
+                    return None
+                data = resp.read(_CAA_MAX_BYTES + 1)
+        except Exception:
+            return None
+        if not data or len(data) > _CAA_MAX_BYTES or len(data) < 100:
+            return None
+        return data
+
+    async def _caa_cached(entry: dict, cover_id: str, kind: str = 'release'):
+        """Cached cover file (fetch + cache on first use) for this upload
+        token, or None when there's no art."""
+        tag = 'rg_' if kind == 'release-group' else ''
+        dest = entry['dir'] / f'caa_{tag}{cover_id}.jpg'
+        if dest.exists() and dest.stat().st_size > 100:
+            return dest
+        data = await asyncio.get_event_loop().run_in_executor(
+            None, _caa_fetch_front, cover_id, 500, kind)
+        if data is None:
+            return None
+        dest.write_bytes(data)
+        return dest
+
+    def _mb_release_group_covers(artist: str, query: str) -> list:
+        """Release-group search -> [{id, title, year, studio}], studio
+        albums first."""
+        import json as _json
+        import urllib.request
+        import urllib.parse
+
+        def _phrase(s):
+            return s.replace('\\', '\\\\').replace('"', '\\"')
+
+        parts = []
+        if query:
+            parts.append('releasegroup:"%s"' % _phrase(query))
+        if artist:
+            parts.append('artist:"%s"' % _phrase(artist))
+        if not parts:
+            return []
+        url = ('https://musicbrainz.org/ws/2/release-group?'
+               + urllib.parse.urlencode(
+                   {'query': ' AND '.join(parts), 'fmt': 'json', 'limit': 15}))
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': _CAA_UA})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                body = _json.loads(resp.read().decode('utf-8', 'replace'))
+        except Exception:
+            return []
+        out = []
+        for rg in (body.get('release-groups') or []):
+            if not isinstance(rg, dict) or not rg.get('id'):
+                continue
+            secs = {str(s).lower() for s in (rg.get('secondary-types') or [])}
+            studio = (str(rg.get('primary-type', '')).lower() == 'album'
+                      and not (secs & _CAA_SECONDARY_SKIP))
+            out.append({
+                'id': str(rg['id']),
+                'title': str(rg.get('title', '') or ''),
+                'year': str(rg.get('first-release-date', '') or '')[:4],
+                'studio': studio,
+            })
+        out.sort(key=lambda g: (0 if g['studio'] else 1, g['year'] or '9999'))
+        return out
+
+    @app.get('/api/plugins/feedpakr/cover-search')
+    async def cover_search(artist: str = '', query: str = ''):
+        """Album-centric cover candidates (release-groups) for the art
+        picker. `query` is the ALBUM (best) or the song title. Studio
+        album first."""
+        if not (artist.strip() or query.strip()):
+            return {'covers': []}
+        covers = await asyncio.get_event_loop().run_in_executor(
+            None, _mb_release_group_covers, artist.strip(), query.strip())
+        return {'covers': covers}
+
+    @app.get('/api/plugins/feedpakr/caa-cover/{cover_id}')
+    async def caa_cover(cover_id: str, upload_id: str = '', group: int = 0):
+        """Serve the CAA front cover for a release (or release-group when
+        ?group=1), cached under the upload token's temp dir. 404 when
+        there's no art — the picker hides the tile."""
+        entry = _uploads.get(upload_id)
+        if entry is None:
+            return JSONResponse({'error': 'Unknown or expired upload_id'}, 400)
+        if not _CAA_ID_RE.match(cover_id or ''):
+            return JSONResponse({'error': 'invalid id'}, 400)
+        dest = await _caa_cached(entry, cover_id, 'release-group' if group else 'release')
+        if dest is None:
+            return JSONResponse({'error': 'no cover art'}, 404)
+        return FileResponse(dest, media_type='image/jpeg')
+
+    @app.post('/api/plugins/feedpakr/use-caa-cover')
+    async def use_caa_cover(data: dict):
+        """Pick a CAA cover as this upload's cover art: fetch/cache it and
+        attach it exactly like upload-cover."""
+        token = data.get('upload_id', '')
+        entry = _uploads.get(token)
+        if entry is None:
+            return {'error': 'Unknown or expired upload_id'}
+        cover_id = str((data or {}).get('release_id') or '')
+        kind = 'release-group' if (data or {}).get('group') else 'release'
+        if not _CAA_ID_RE.match(cover_id):
+            return {'error': 'invalid id'}
+        dest = await _caa_cached(entry, cover_id, kind)
+        if dest is None:
+            return {'error': 'no cover art'}
+        entry['cover_path'] = dest
+        return {'ok': True}
+
     @app.post('/api/plugins/feedpakr/upload-audio')
     async def upload_audio(data: dict):
         """Attach a user-supplied audio recording to an upload token, for
@@ -260,6 +407,15 @@ def setup(app, context):
         title: str = '',
         artist: str = '',
         album: str = '',
+        year: str = '',
+        album_artist: str = '',
+        track_num: str = '',
+        disc: str = '',
+        genres: str = '',
+        mbid: str = '',
+        isrc: str = '',
+        language: str = '',
+        authors: str = '',
         audio_mode: str = 'midi',
     ):
         """Build a .feedpak from the uploaded GP file, stream progress.
@@ -268,6 +424,8 @@ def setup(app, context):
         names:  comma-separated "idx:Name" pairs for renamed arrangements,
                 e.g. "0:Lead,2:Bass" — indices without an entry fall back
                 to gp2rs's own auto-naming.
+        year/track_num/disc: plain integers, or empty when unset.
+        genres/authors: comma-separated lists.
         audio_mode: "midi" (GP3-5 FluidSynth synthesis), "embedded" (GP8's
                 own backing track), "sync" (a user-uploaded or YouTube-
                 fetched recording, aligned via autosync — needs
@@ -313,6 +471,21 @@ def setup(app, context):
         user_audio_path = str(entry['audio_path']) if entry.get('audio_path') else None
         tmp_dir = entry['dir']
 
+        def _int_or_none(s: str) -> int | None:
+            s = s.strip()
+            if not s:
+                return None
+            try:
+                return int(s)
+            except ValueError:
+                return None
+
+        year_val = _int_or_none(year)
+        track_val = _int_or_none(track_num)
+        disc_val = _int_or_none(disc)
+        genres_list = [g.strip() for g in genres.split(',') if g.strip()]
+        authors_list = [a.strip() for a in authors.split(',') if a.strip()]
+
         progress_queue: asyncio.Queue = asyncio.Queue()
 
         def _report(stage: str, pct: int) -> None:
@@ -325,6 +498,11 @@ def setup(app, context):
                     track_indices=track_indices,
                     arrangement_names=arrangement_names,
                     title=title, artist=artist, album=album,
+                    year=year_val, album_artist=album_artist,
+                    track=track_val, disc=disc_val,
+                    genres=genres_list, mbid=mbid.strip(),
+                    isrc=isrc.strip(), language=language.strip(),
+                    authors=authors_list,
                     audio_mode=audio_mode,
                     user_audio_path=user_audio_path,
                     cover_path=cover_path,

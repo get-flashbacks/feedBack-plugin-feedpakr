@@ -578,6 +578,18 @@ def build_feedpak(
             warnings.append('No sections/beats found in the source file.')
         duration = float(song_meta.song_length) if song_meta else 0.0
 
+        # Sanity check: audio duration must match chart duration (allow ±5% tolerance for rounding).
+        if audio_path and duration > 0:
+            audio_duration = audio_mod.get_audio_duration(audio_path)
+            if audio_duration is not None:
+                drift = abs(audio_duration - duration)
+                tolerance = duration * 0.05
+                if drift > tolerance:
+                    warnings.append(
+                        f'Audio duration mismatch: audio is {audio_duration:.1f}s but chart is {duration:.1f}s. '
+                        f'Check that the correct audio file was uploaded.'
+                    )
+
         report('Extracting lyrics…', 72)
         if lyrics_entries is None and not is_gpif and gp_song is not None and song_meta is not None:
             try:

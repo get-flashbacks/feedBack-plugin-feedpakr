@@ -193,6 +193,79 @@ async function fprFetchYoutube() {
     }
 }
 
+// ── Album cover search (MusicBrainz release-groups + Cover Art Archive) ────
+// Same mechanism as the editor plugin's cover picker: search by artist +
+// album/title, studio albums sorted first, click a tile to fetch/cache/attach.
+async function fprSearchCover() {
+    if (!_uploadId) return;
+    const artist = (document.getElementById('fpr-artist').value || '').trim();
+    const album = (document.getElementById('fpr-album').value || '').trim();
+    const title = (document.getElementById('fpr-title').value || '').trim();
+    const query = album || title;
+    const status = document.getElementById('fpr-cover-status');
+    const results = document.getElementById('fpr-cover-results');
+
+    if (!artist && !query) {
+        if (status) status.textContent = 'Fill in artist and/or album first.';
+        return;
+    }
+    if (status) status.textContent = 'Searching MusicBrainz…';
+    results.classList.add('hidden');
+    results.classList.remove('grid', 'grid-cols-4');
+    results.innerHTML = '';
+
+    try {
+        const params = new URLSearchParams({ artist, query });
+        const resp = await fetch(`${API_BASE}/cover-search?${params}`);
+        const data = await resp.json();
+        const covers = data.covers || [];
+        if (!covers.length) {
+            if (status) status.textContent = 'No candidates found — try adjusting artist/album, or upload a file instead.';
+            return;
+        }
+        if (status) status.textContent = `${covers.length} candidate(s) — click one to use it:`;
+        results.classList.remove('hidden');
+        results.classList.add('grid', 'grid-cols-4');
+        for (const c of covers) {
+            const tile = document.createElement('button');
+            tile.type = 'button';
+            tile.className = 'relative aspect-square rounded-lg overflow-hidden border border-gray-700 hover:border-accent transition bg-dark-600';
+            tile.title = `${c.title || 'Untitled'}${c.year ? ' (' + c.year + ')' : ''}${c.studio ? '' : ' — non-studio release'}`;
+            const img = document.createElement('img');
+            img.className = 'w-full h-full object-cover';
+            img.loading = 'lazy';
+            img.src = `${API_BASE}/caa-cover/${encodeURIComponent(c.id)}?upload_id=${encodeURIComponent(_uploadId)}&group=1`;
+            img.onerror = () => { tile.remove(); };
+            tile.appendChild(img);
+            tile.onclick = () => fprUseCover(c.id);
+            results.appendChild(tile);
+        }
+    } catch (err) {
+        if (status) status.textContent = `Search failed: ${String(err)}`;
+    }
+}
+
+async function fprUseCover(releaseGroupId) {
+    if (!_uploadId) return;
+    const status = document.getElementById('fpr-cover-status');
+    if (status) status.textContent = 'Fetching cover…';
+    try {
+        const resp = await fetch(`${API_BASE}/use-caa-cover`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ upload_id: _uploadId, release_id: releaseGroupId, group: true }),
+        });
+        const data = await resp.json();
+        if (data.error) {
+            if (status) status.textContent = `Couldn't use that cover: ${data.error}`;
+            return;
+        }
+        if (status) status.textContent = 'Cover attached — will be baked into the pack.';
+    } catch (err) {
+        if (status) status.textContent = `Failed to attach cover: ${String(err)}`;
+    }
+}
+
 function fprUpdateAudioModeUI() {
     const selected = document.querySelector('input[name="fpr-audio-mode"]:checked');
     const mode = selected ? selected.value : 'midi';
@@ -306,6 +379,17 @@ async function fprBuild() {
     const title  = document.getElementById('fpr-title').value.trim();
     const artist = document.getElementById('fpr-artist').value.trim();
     const album  = document.getElementById('fpr-album').value.trim();
+    // Extended metadata (feedpak spec §5.1) — all optional, same field set
+    // as the editor plugin's create-modal "Song details" panel.
+    const albumArtist = (document.getElementById('fpr-album-artist')?.value || '').trim();
+    const year = (document.getElementById('fpr-year')?.value || '').trim();
+    const track = (document.getElementById('fpr-track')?.value || '').trim();
+    const disc = (document.getElementById('fpr-disc')?.value || '').trim();
+    const genres = (document.getElementById('fpr-genres')?.value || '').trim();
+    const language = (document.getElementById('fpr-language')?.value || '').trim();
+    const isrc = (document.getElementById('fpr-isrc')?.value || '').trim();
+    const mbid = (document.getElementById('fpr-mbid')?.value || '').trim();
+    const authors = (document.getElementById('fpr-authors')?.value || '').trim();
     const audioModeInput = document.querySelector('input[name="fpr-audio-mode"]:checked');
     const audioMode = audioModeInput ? audioModeInput.value : 'midi';
 
@@ -323,6 +407,8 @@ async function fprBuild() {
     _buildDone = false;
     const params = new URLSearchParams({
         upload_id: _uploadId, tracks, names, title, artist, album,
+        album_artist: albumArtist, year, track_num: track, disc,
+        genres, language, isrc, mbid, authors,
         audio_mode: audioMode,
     });
     const ws = new WebSocket(`${WS_BASE}/build?${params}`);
