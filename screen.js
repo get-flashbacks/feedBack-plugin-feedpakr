@@ -20,7 +20,7 @@ let _hasEmbeddedAudio = false;
 let _audioAttached = false;
 let _sloppaks = [];
 let _upgradeDone = false;
-let _handoffAvailability = { preview: null, split: null };
+let _handoffAvailability = { preview: null, split: null, lyrics: null };
 
 function esc(s) {
     return String(s)
@@ -366,6 +366,12 @@ async function fprProbeHandoffs() {
             _handoffAvailability.split = r.ok;
         } catch (err) { _handoffAvailability.split = false; }
     }
+    if (_handoffAvailability.lyrics === null) {
+        try {
+            const r = await fetch('/api/plugins/lyrics_sync/status');
+            _handoffAvailability.lyrics = r.ok;
+        } catch (err) { _handoffAvailability.lyrics = false; }
+    }
 }
 
 function fprHandoffButtonsHtml(relPath) {
@@ -378,6 +384,10 @@ function fprHandoffButtonsHtml(relPath) {
         <button data-handoff="split" data-handoff-path="${esc(relPath)}"
             class="hidden px-3 py-1 rounded-lg text-xs text-gray-300 bg-dark-600 hover:bg-dark-500 transition">
             Split Stems
+        </button>
+        <button data-handoff="lyrics" data-handoff-path="${esc(relPath)}"
+            class="hidden px-3 py-1 rounded-lg text-xs text-gray-300 bg-dark-600 hover:bg-dark-500 transition">
+            Generate Lyrics
         </button>
         <span data-handoff-status class="text-xs text-gray-500"></span>
     </div>`;
@@ -394,6 +404,11 @@ async function fprWireHandoffButtons(container) {
         if (!_handoffAvailability.split) return;
         btn.classList.remove('hidden');
         btn.addEventListener('click', () => fprRunHandoff(btn, 'split'));
+    });
+    container.querySelectorAll('[data-handoff="lyrics"]').forEach((btn) => {
+        if (!_handoffAvailability.lyrics) return;
+        btn.classList.remove('hidden');
+        btn.addEventListener('click', () => fprShowLyricsModal(btn));
     });
 }
 
@@ -426,6 +441,99 @@ async function fprRunHandoff(btn, kind) {
     } catch (err) {
         if (statusEl) statusEl.textContent = `Failed: ${String(err)}`;
         btn.disabled = false;
+    }
+}
+
+function fprShowLyricsModal(btn) {
+    const relPath = btn.getAttribute('data-handoff-path');
+    const modal = document.createElement('div');
+    modal.id = 'fpr-lyrics-modal';
+    modal.className = 'fixed inset-0 bg-black/60 flex items-center justify-center z-50';
+    modal.innerHTML = `
+        <div class="bg-dark-700 border border-gray-800 rounded-xl p-6 w-full max-w-2xl mx-4">
+            <h3 class="text-lg font-semibold text-white mb-4">Generate Lyrics</h3>
+            <p class="text-xs text-gray-400 mb-4">
+                Paste your song lyrics below. They will be aligned to the vocal timing using the lyrics plugin.
+            </p>
+            <textarea id="fpr-lyrics-input" placeholder="Paste your lyrics here..."
+                class="w-full h-48 bg-dark-600 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-accent/50 font-mono resize-none mb-4"></textarea>
+            <div class="flex gap-3">
+                <button onclick="fprGenerateLyrics('${esc(relPath)}')"
+                    class="bg-accent hover:bg-accent-light px-4 py-2 rounded-lg text-sm font-semibold text-white transition">
+                    Generate & Align
+                </button>
+                <button onclick="document.getElementById('fpr-lyrics-modal').remove()"
+                    class="px-4 py-2 rounded-lg text-sm text-gray-500 hover:text-white transition">
+                    Cancel
+                </button>
+            </div>
+        </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.remove();
+    });
+    document.getElementById('fpr-lyrics-input').focus();
+}
+
+async function fprGenerateLyrics(relPath) {
+    const modal = document.getElementById('fpr-lyrics-modal');
+    const textarea = document.getElementById('fpr-lyrics-input');
+    const lyricsText = textarea.value.trim();
+
+    if (!lyricsText) {
+        alert('Please paste some lyrics first');
+        return;
+    }
+
+    const modal_text = modal.querySelector('h3');
+    const old_text = modal_text.textContent;
+    modal_text.textContent = 'Generating lyrics…';
+    textarea.disabled = true;
+    const buttons = modal.querySelectorAll('button');
+    buttons.forEach(b => b.disabled = true);
+
+    try {
+        const resp = await fetch('/api/plugins/lyrics_sync/align', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                filename: relPath,
+                lyrics_text: lyricsText,
+                language: '',
+                granularity: 'line',
+            }),
+        });
+
+        const data = await resp.json();
+
+        if (data.error || !data.segments) {
+            alert('Lyrics generation failed: ' + (data.error || 'Unknown error'));
+            modal.remove();
+            return;
+        }
+
+        // Save the aligned lyrics to the song
+        const saveResp = await fetch('/api/plugins/lyrics_sync/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                filename: relPath,
+                segments: data.segments,
+            }),
+        });
+
+        const saveData = await saveResp.json();
+        if (saveData.error) {
+            alert('Failed to save lyrics: ' + saveData.error);
+        } else {
+            alert(`Success! Added ${saveData.lyrics_count} lyrics entries to your song.`);
+            modal.remove();
+        }
+    } catch (err) {
+        alert('Error: ' + String(err));
+        modal_text.textContent = old_text;
+        textarea.disabled = false;
+        buttons.forEach(b => b.disabled = false);
     }
 }
 
