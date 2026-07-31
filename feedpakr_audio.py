@@ -83,9 +83,12 @@ def autosync_audio(gp_path: str, audio_path: str, progress_cb=None):
 def transcode_to_ogg(src_path: str, out_path: str, timeout: int = 120):
     """Normalize an arbitrary user-supplied/fetched audio file to OGG so
     every non-embedded, non-synthesized stem meets the feedpak-spec
-    baseline codec requirement (OGG/WAV MUST). Returns (path, error)."""
+    baseline codec requirement. The spec allows both OGG and WAV per §5.3.2,
+    but browsers reliably support only OGG — so WAV inputs are transcoded to
+    OGG for maximum compatibility (spec-valid, browser-compatible). Returns
+    (path, error)."""
     src = Path(src_path)
-    if src.suffix.lower() in ('.ogg', '.wav'):
+    if src.suffix.lower() == '.ogg':
         return str(src), None
     try:
         result = subprocess.run(
