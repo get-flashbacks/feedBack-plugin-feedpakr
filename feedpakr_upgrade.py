@@ -240,6 +240,7 @@ def upgrade_sloppak(sloppak_path: str) -> dict:
 
     new_manifest = dict(manifest)
     new_manifest['feedpak_version'] = FEEDPAK_VERSION
+    has_recorded_audio_provenance = isinstance(new_manifest.get('stem_separation'), dict)
 
     _promote_full_stem(new_manifest, src, warnings)
     _normalize_lyrics_source(new_manifest, warnings)
@@ -284,7 +285,8 @@ def upgrade_sloppak(sloppak_path: str) -> dict:
             written_members.add(rel)
 
     real_audio = any(
-        str(stem.get('id')) == 'full'
+        has_recorded_audio_provenance
+        and str(stem.get('id')) == 'full'
         and isinstance(stem.get('file'), str)
         and stem['file'] in written_members
         for stem in (new_manifest.get('stems') or [])
