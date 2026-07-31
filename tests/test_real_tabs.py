@@ -139,12 +139,41 @@ def test_real_tab_chords_map_consistently_to_templates(name):
     assert checked_any, f'{name}: no chords found to check — selection may be wrong'
 
 
+def test_black_authored_chord_names_reach_templates():
+    """GP8 associates displayed chord names through Beat/Chord item refs;
+    Diagram frets may be identical placeholders when ShowDiagram is false."""
+    name = 'Black (J).gp'
+    gp_path = TABS_DIR / name
+    if not gp_path.is_file():
+        pytest.skip(f'{name} not present on this machine')
+    track_indices, names = _auto_selection(str(gp_path))
+
+    result = pipeline.build_feedpak(
+        str(gp_path), track_indices=track_indices,
+        arrangement_names=names, audio_mode='none',
+        report=lambda stage, pct: None,
+    )
+
+    import io
+    import json
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
+        lead = json.loads(zf.read('arrangements/lead.json'))
+        rhythm = json.loads(zf.read('arrangements/rhythm.json'))
+
+    lead_names = {t['name'] for t in lead['templates'] if t.get('name')}
+    rhythm_names = {t['name'] for t in rhythm['templates'] if t.get('name')}
+    assert {'E', 'A', 'C'}.issubset(lead_names)
+    assert {'E', 'A5', 'E7'}.issubset(rhythm_names)
+
+
 @pytest.mark.parametrize('name', list(CASES))
 def test_real_tab_warns_about_same_string_chord_collisions(name):
-    """'Rehab (J).gp' (drums) and 'So Far Away (J).gp' (rhythm) are known
-    to hit the same-string chord-template gap described above — locks in
-    that feedpakr surfaces it as a warning rather than staying silent."""
-    KNOWN_AFFECTED = {'Rehab (J).gp', 'So Far Away (J).gp'}
+    """So Far Away's rhythm track hits the same-string chord-template gap
+    described above, and feedpakr must surface it rather than stay silent."""
+    # Rehab's collisions were all on its drum track; proper GPIF drum-tab
+    # routing no longer builds guitar-style chord templates for that track.
+    KNOWN_AFFECTED = {'So Far Away (J).gp'}
     if name not in KNOWN_AFFECTED:
         pytest.skip('not a known-affected fixture')
     gp_path = TABS_DIR / name
@@ -177,6 +206,9 @@ def test_real_tab_handshapes_derived_when_chords_present(name):
         report=lambda stage, pct: None,
     )
     assert result['features']['handshapes'] is True
+    # Every fixture contains at least one GPIF percussion track. It must be
+    # routed to drum-tab instead of contributing guitar-style handshapes.
+    assert result['features']['drum_arrangements'] >= 1
 
 
 @pytest.mark.parametrize('name', list(CASES))
