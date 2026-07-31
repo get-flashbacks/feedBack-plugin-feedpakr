@@ -8,7 +8,10 @@ what to do with it (drop the offending side file, warn, etc).
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
+
+import yaml
 
 try:
     import jsonschema
@@ -117,4 +120,72 @@ def validate_pack(
         if errs:
             report[filename] = errs
 
+    return report
+
+
+def validate_feedpak_file(path: str | Path) -> dict[str, list[str]]:
+    """Validate the manifest and referenced JSON sidecars in a feedpak ZIP."""
+    source = Path(path)
+    report: dict[str, list[str]] = {}
+    with zipfile.ZipFile(source) as zf:
+        manifest_name = next(
+            (name for name in ('manifest.yaml', 'manifest.yml') if name in zf.namelist()),
+            None,
+        )
+        if manifest_name is None:
+            return {'manifest.yaml': ['<root>: manifest file is missing']}
+        try:
+            manifest = yaml.safe_load(zf.read(manifest_name).decode('utf-8'))
+        except Exception as exc:
+            return {manifest_name: [f'<root>: could not parse YAML: {exc}']}
+        if not isinstance(manifest, dict):
+            return {manifest_name: ['<root>: manifest must be an object']}
+
+        def read_json(rel: str) -> dict | None:
+            if not rel:
+                return None
+            try:
+                payload = json.loads(zf.read(rel))
+            except KeyError:
+                report.setdefault(rel, []).append('<root>: referenced file is missing')
+                return None
+            except Exception as exc:
+                report.setdefault(rel, []).append(f'<root>: could not parse JSON: {exc}')
+                return None
+            if not isinstance(payload, dict):
+                report.setdefault(rel, []).append('<root>: payload must be an object')
+                return None
+            return payload
+
+        arrangements: dict[str, dict] = {}
+        drum_tabs: dict[str, dict] = {}
+        notations: dict[str, dict] = {}
+        for entry in manifest.get('arrangements', []) or []:
+            if not isinstance(entry, dict):
+                continue
+            rel = entry.get('file')
+            payload = read_json(rel) if isinstance(rel, str) else None
+            if payload is not None:
+                arrangements[rel.removeprefix('arrangements/')] = payload
+            for key, dest in (('drum_tab', drum_tabs), ('notation', notations)):
+                side_rel = entry.get(key)
+                side_payload = read_json(side_rel) if isinstance(side_rel, str) else None
+                if side_payload is not None:
+                    dest[side_rel] = side_payload
+
+        def referenced(name: str) -> dict | None:
+            rel = manifest.get(name)
+            return read_json(rel) if isinstance(rel, str) else None
+
+        schema_report = validate_pack(
+            manifest=manifest,
+            arrangement_files=arrangements,
+            song_timeline=referenced('song_timeline'),
+            keys=referenced('keys'),
+            vocal_pitch=referenced('vocal_pitch'),
+            drum_tab_files=drum_tabs,
+            notation_files=notations,
+        )
+        for part, errors in schema_report.items():
+            report.setdefault(part, []).extend(errors)
     return report

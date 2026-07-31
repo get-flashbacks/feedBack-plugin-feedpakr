@@ -307,6 +307,60 @@ def test_build_feedpak_gpif_keys_track_gets_notation():
 
 
 @gp8_fixture_available
+def test_build_feedpak_gpif_non_keys_track_can_request_notation():
+    result = pipeline.build_feedpak(
+        str(MONEY_GP8),
+        track_indices=[3],  # Bass: melodic, but not auto-enabled like keys.
+        arrangement_names={3: 'Bass'},
+        notation_track_indices={3},
+        audio_mode='none',
+        report=lambda stage, pct: None,
+    )
+    import io
+    import json
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
+        manifest = yaml.safe_load(zf.read('manifest.yaml'))
+        entry = manifest['arrangements'][0]
+        notation = json.loads(zf.read(entry['notation']))
+    assert notation['instrument'] == 'melodic'
+    assert notation['measures']
+
+
+@gp8_fixture_available
+def test_build_feedpak_gpif_notation_selection_can_disable_keys_default():
+    result = pipeline.build_feedpak(
+        str(MONEY_GP8),
+        track_indices=[5],
+        arrangement_names={5: 'Keys'},
+        notation_track_indices=set(),
+        audio_mode='none',
+        report=lambda stage, pct: None,
+    )
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
+        manifest = yaml.safe_load(zf.read('manifest.yaml'))
+    assert 'notation' not in manifest['arrangements'][0]
+
+
+@fixture_available
+def test_build_feedpak_reports_only_recorded_audio_as_split_eligible(tmp_path, monkeypatch):
+    audio_path = tmp_path / 'recording.ogg'
+    audio_path.write_bytes(b'OggS')
+    monkeypatch.setattr(pipeline, '_resolve_audio', lambda *a, **k: (str(audio_path), 0.0))
+    monkeypatch.setattr(pipeline.audio_mod, 'get_audio_duration', lambda _path: None)
+    result = pipeline.build_feedpak(
+        str(MONEY_GP5),
+        track_indices=[3],
+        arrangement_names={3: 'Bass'},
+        audio_mode='sync',
+        report=lambda stage, pct: None,
+    )
+    assert result['features']['real_audio'] is True
+
+
+@gp8_fixture_available
 def test_build_feedpak_gpif_vocal_track_produces_vocal_pitch():
     result = pipeline.build_feedpak(
         str(MONEY_GP8),

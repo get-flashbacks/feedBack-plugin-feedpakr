@@ -331,6 +331,7 @@ def build_feedpak(
     isrc: str = '',
     language: str = '',
     authors: list[str] | None = None,
+    notation_track_indices: set[int] | None = None,
     audio_mode: str = 'midi',
     user_audio_path: str | None = None,
     cover_path: str | None = None,
@@ -554,10 +555,22 @@ def build_feedpak(
                 'capo': arr.capo,
             }
 
-            if is_gpif and idx is not None and track_by_index.get(idx, {}).get('is_piano'):
+            track_info = track_by_index.get(idx, {}) if idx is not None else {}
+            wants_notation = (
+                is_gpif and idx is not None
+                and (
+                    idx in notation_track_indices
+                    if notation_track_indices is not None
+                    else bool(track_info.get('is_piano'))
+                )
+            )
+            if wants_notation:
                 try:
-                    notation = notation_mod.convert_keys_track_notation(
-                        gp_path, idx, track_by_index[idx]['name'],
+                    notation = notation_mod.convert_track_notation(
+                        gp_path,
+                        idx,
+                        track_info.get('name') or arr.name,
+                        instrument='piano' if track_info.get('is_piano') else 'melodic',
                     )
                     if notation:
                         notation_filename = f'notation_{arr_id}.json'
@@ -582,11 +595,17 @@ def build_feedpak(
         if audio_path and duration > 0:
             audio_duration = audio_mod.get_audio_duration(audio_path)
             if audio_duration is not None:
-                drift = abs(audio_duration - duration)
-                tolerance = duration * 0.05
+                # convert_file shifts chart events by audio_offset, so compare
+                # the audio endpoint with the aligned chart endpoint rather
+                # than the unshifted source duration. This avoids flagging a
+                # legitimate recording lead-in as the wrong song.
+                aligned_duration = max(0.0, duration + audio_offset)
+                drift = abs(audio_duration - aligned_duration)
+                tolerance = max(aligned_duration, duration) * 0.05
                 if drift > tolerance:
                     warnings.append(
-                        f'Audio duration mismatch: audio is {audio_duration:.1f}s but chart is {duration:.1f}s. '
+                        f'Audio duration mismatch: audio is {audio_duration:.1f}s but the aligned chart is '
+                        f'{aligned_duration:.1f}s. '
                         f'Check that the correct audio file was uploaded.'
                     )
 
@@ -696,6 +715,9 @@ def build_feedpak(
                 ),
                 'tones': any(
                     arr.get('tones') for arr in arrangement_files.values()
+                ),
+                'real_audio': bool(
+                    audio_path and audio_mode in {'embedded', 'sync'}
                 ),
             },
         }

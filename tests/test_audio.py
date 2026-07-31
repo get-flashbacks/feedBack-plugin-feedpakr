@@ -44,3 +44,67 @@ def test_transcode_to_ogg_converts_wav_to_ogg(tmp_path):
     assert out_path.exists()
     # Output should be OGG (starts with OGG signature)
     assert out_path.read_bytes()[:4] == b'OggS'
+
+
+def test_youtube_download_ignores_partial_files(tmp_path):
+    """Regression: download_youtube_audio's fallback should NOT match .part/.ytdl files.
+
+    yt-dlp leaves .part/.ytdl files when downloads abort (network flake, throttling,
+    outdated yt-dlp). The old code grabbed any youtube_audio.* file, which matched
+    these fragments — transcode_to_ogg dutifully converted the 2-3 second fragment
+    into a clean-looking short OGG, causing silent import failure."""
+    # Simulate aborted download state: .part and .ytdl exist, but not .ogg
+    (tmp_path / 'youtube_audio.part').write_bytes(b'partial data')
+    (tmp_path / 'youtube_audio.ytdl').write_bytes(b'metadata')
+
+    candidates = audio_mod._completed_youtube_downloads(tmp_path)
+
+    # Should find nothing (both files are filtered out)
+    assert len(candidates) == 0
+
+
+def test_youtube_download_fallback_accepts_valid_formats(tmp_path):
+    """Fallback should accept valid audio formats (.mp3, .m4a, .wav, .webm, .mkv, .flv)."""
+    (tmp_path / 'youtube_audio.mp3').write_bytes(b'mp3 data')
+    (tmp_path / 'youtube_audio.m4a').write_bytes(b'm4a data')
+
+    candidates = audio_mod._completed_youtube_downloads(tmp_path)
+
+    assert len(candidates) == 2
+    assert all(p.name in ('youtube_audio.mp3', 'youtube_audio.m4a') for p in candidates)
+
+
+def test_get_audio_duration_missing_file():
+    """get_audio_duration should return None for non-existent files."""
+    result = audio_mod.get_audio_duration('/nonexistent/file.mp3')
+    assert result is None
+
+
+def test_get_audio_duration_invalid_file(tmp_path):
+    """get_audio_duration should return None for non-audio files."""
+    invalid_file = tmp_path / 'not_audio.txt'
+    invalid_file.write_text('just text')
+
+    result = audio_mod.get_audio_duration(str(invalid_file))
+    # If ffprobe is available, this will return None (invalid format);
+    # if not available, this will also return None.
+    assert result is None
+
+
+def test_get_audio_duration_uses_supported_ffprobe_writer_options(tmp_path, monkeypatch):
+    audio_file = tmp_path / 'audio.ogg'
+    audio_file.write_bytes(b'OggS')
+    captured = {}
+
+    class Result:
+        returncode = 0
+        stdout = '123.5\n'
+
+    def fake_run(command, **kwargs):
+        captured['command'] = command
+        return Result()
+
+    monkeypatch.setattr(audio_mod.subprocess, 'run', fake_run)
+    assert audio_mod.get_audio_duration(str(audio_file)) == 123.5
+    writer = captured['command'][captured['command'].index('-of') + 1]
+    assert writer == 'default=noprint_wrappers=1:nokey=1'

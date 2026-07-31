@@ -36,8 +36,14 @@ def raw_track_index_map(root) -> dict[int, int]:
     return {i: t['stave_columns'][0] for i, t in enumerate(raw_tracks)}
 
 
-def convert_keys_track_notation(gp_path: str, track_index: int, track_name: str) -> dict | None:
-    """Build a notation payload for one GPIF keys/piano track, or None on
+def convert_track_notation(
+    gp_path: str,
+    track_index: int,
+    track_name: str,
+    *,
+    instrument: str = 'piano',
+) -> dict | None:
+    """Build a notation payload for one selected GPIF track, or None on
     any failure (caller treats this as best-effort, like everything else)."""
     if gp2rs_gpx is None or gp2notation is None:
         return None
@@ -51,6 +57,9 @@ def convert_keys_track_notation(gp_path: str, track_index: int, track_name: str)
         root,
         raw_map[track_index],
         raw_tracks[track_index]['string_pitches'],
-        instrument='piano',
+        instrument=instrument,
         track_name=track_name,
     )
+
+
+convert_keys_track_notation = convert_track_notation

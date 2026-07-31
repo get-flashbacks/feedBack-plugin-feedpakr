@@ -2,7 +2,11 @@
 schemas. If jsonschema isn't installed, these tests self-skip rather than
 false-fail — the module itself degrades the same way at runtime."""
 
+import json
+import zipfile
+
 import pytest
+import yaml
 
 import feedpakr_validate as validate
 
@@ -94,3 +98,24 @@ def test_validate_pack_reports_broken_arrangement():
     arrangement_files = {'lead.json': {'notes': [{'s': 0, 'f': 3}]}}  # note missing required 't'
     report = validate.validate_pack(manifest=manifest, arrangement_files=arrangement_files)
     assert 'arrangements/lead.json' in report
+
+
+def test_validate_feedpak_file_reads_referenced_parts(tmp_path):
+    path = tmp_path / 'valid.feedpak'
+    arrangement = {
+        'name': 'Lead', 'tuning': [0] * 6, 'capo': 0, 'centOffset': 0.0,
+        'notes': [{'t': 0.0, 's': 0, 'f': 3}], 'chords': [], 'anchors': [],
+        'handshapes': [], 'templates': [],
+    }
+    with zipfile.ZipFile(path, 'w') as zf:
+        zf.writestr('manifest.yaml', yaml.safe_dump(_valid_manifest()))
+        zf.writestr('arrangements/lead.json', json.dumps(arrangement))
+    assert validate.validate_feedpak_file(path) == {}
+
+
+def test_validate_feedpak_file_reports_missing_reference(tmp_path):
+    path = tmp_path / 'broken.feedpak'
+    with zipfile.ZipFile(path, 'w') as zf:
+        zf.writestr('manifest.yaml', yaml.safe_dump(_valid_manifest()))
+    report = validate.validate_feedpak_file(path)
+    assert report['arrangements/lead.json'] == ['<root>: referenced file is missing']

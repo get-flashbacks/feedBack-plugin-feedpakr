@@ -348,6 +348,11 @@ function fprShowParsed(data) {
             <input type="text" data-track-name="${t.index}" value="${esc(t.auto_name || '')}"
                 placeholder="Arrangement name"
                 class="w-32 bg-dark-600 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 outline-none focus:border-accent/50 shrink-0">
+            ${_format === 'gpif' && !t.is_vocal && !t.is_drums ? `
+            <label class="text-xs text-gray-500 shrink-0" title="Generate a standard-notation sidecar">
+                <input type="checkbox" data-track-notation="${t.index}" ${t.is_piano ? 'checked' : ''}
+                    class="accent-blue-500"> Notation
+            </label>` : ''}
         </div>`;
     }).join('') || '<p class="text-xs text-gray-600">No tracks found.</p>';
 }
@@ -357,6 +362,7 @@ function fprShowParsed(data) {
 function fprCollectTracks() {
     const indices = [];
     const names = [];
+    const notation = [];
     for (const t of _tracks) {
         const check = document.querySelector(`[data-track-check="${t.index}"]`);
         if (!check || !check.checked) continue;
@@ -364,13 +370,15 @@ function fprCollectTracks() {
         const nameInput = document.querySelector(`[data-track-name="${t.index}"]`);
         const name = (nameInput && nameInput.value.trim()) || '';
         if (name) names.push(`${t.index}:${name}`);
+        const notationCheck = document.querySelector(`[data-track-notation="${t.index}"]`);
+        if (notationCheck?.checked) notation.push(t.index);
     }
-    return { tracks: indices.join(','), names: names.join(',') };
+    return { tracks: indices.join(','), names: names.join(','), notation: notation.join(',') };
 }
 
 async function fprBuild() {
     if (!_uploadId) return;
-    const { tracks, names } = fprCollectTracks();
+    const { tracks, names, notation } = fprCollectTracks();
     if (!tracks) {
         alert('Select at least one track to import.');
         return;
@@ -409,6 +417,7 @@ async function fprBuild() {
         upload_id: _uploadId, tracks, names, title, artist, album,
         album_artist: albumArtist, year, track_num: track, disc,
         genres, language, isrc, mbid, authors,
+        notation_tracks: notation,
         audio_mode: audioMode,
     });
     const ws = new WebSocket(`${WS_BASE}/build?${params}`);
@@ -466,14 +475,14 @@ async function fprProbeHandoffs() {
     }
 }
 
-function fprHandoffButtonsHtml(relPath) {
+function fprHandoffButtonsHtml(relPath, allowSplit = true) {
     if (!relPath) return '';
     return `<div class="flex items-center gap-2 mt-2" data-handoff-for="${esc(relPath)}">
         <button data-handoff="preview" data-handoff-path="${esc(relPath)}"
             class="hidden px-3 py-1 rounded-lg text-xs text-gray-300 bg-dark-600 hover:bg-dark-500 transition">
             Generate Preview
         </button>
-        <button data-handoff="split" data-handoff-path="${esc(relPath)}"
+        <button data-handoff="split" data-handoff-path="${esc(relPath)}" data-split-allowed="${allowSplit ? '1' : '0'}"
             class="hidden px-3 py-1 rounded-lg text-xs text-gray-300 bg-dark-600 hover:bg-dark-500 transition">
             Split Stems
         </button>
@@ -489,7 +498,7 @@ async function fprWireHandoffButtons(container) {
         btn.addEventListener('click', () => fprRunHandoff(btn, 'preview'));
     });
     container.querySelectorAll('[data-handoff="split"]').forEach((btn) => {
-        if (!_handoffAvailability.split) return;
+        if (!_handoffAvailability.split || btn.getAttribute('data-split-allowed') !== '1') return;
         btn.classList.remove('hidden');
         btn.addEventListener('click', () => fprRunHandoff(btn, 'split'));
     });
@@ -573,7 +582,7 @@ function fprShowResult(msg) {
             <p class="mt-2">${validityBadge}</p>
             ${featuresHtml}
             ${warningsHtml}
-            ${fprHandoffButtonsHtml(msg.filename_rel)}
+            ${fprHandoffButtonsHtml(msg.filename_rel, !!f.real_audio)}
             <button onclick="fprReset()"
                 class="mt-4 px-4 py-2 bg-dark-600 hover:bg-dark-500 rounded-xl text-sm text-gray-300 transition">
                 Import Another

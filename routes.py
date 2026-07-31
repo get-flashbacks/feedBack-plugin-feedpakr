@@ -42,6 +42,9 @@ for the pattern this is deliberately consistent with):
     Builds a .feedpak from the uploaded GP file, streaming progress
     messages, then writes it into the DLC folder and indexes it.
 
+  POST /api/plugins/feedpakr/validate
+    Validates an existing DLC-relative .feedpak against vendored schemas.
+
   GET  /api/plugins/feedpakr/sloppaks
     Lists every .sloppak under the DLC folder, for the Upgrade Library tab.
 
@@ -77,6 +80,7 @@ _pipeline = None
 _pack = None
 _audio = None
 _upgrade = None
+_validate = None
 
 # GP files are binary (zip-compressed for .gpx/.gp, raw for .gp3/4/5) and
 # can run larger than a MusicXML score — 30 MB comfortably covers real-world
@@ -124,7 +128,7 @@ def _decode_upload(data: dict, *, max_bytes: int, allowed_exts: set[str] | None 
 
 
 def setup(app, context):
-    global _get_dlc_dir, _extract_meta, _meta_db, _log, _pipeline, _pack, _audio, _upgrade
+    global _get_dlc_dir, _extract_meta, _meta_db, _log, _pipeline, _pack, _audio, _upgrade, _validate
     _get_dlc_dir = context['get_dlc_dir']
     _extract_meta = context['extract_meta']
     _meta_db = context['meta_db']
@@ -133,6 +137,7 @@ def setup(app, context):
     _pack = context['load_sibling']('feedpakr_pack')
     _audio = context['load_sibling']('feedpakr_audio')
     _upgrade = context['load_sibling']('feedpakr_upgrade')
+    _validate = context['load_sibling']('feedpakr_validate')
 
     @app.post('/api/plugins/feedpakr/upload')
     async def upload_gp(data: dict):
@@ -416,6 +421,7 @@ def setup(app, context):
         isrc: str = '',
         language: str = '',
         authors: str = '',
+        notation_tracks: str = 'default',
         audio_mode: str = 'midi',
     ):
         """Build a .feedpak from the uploaded GP file, stream progress.
@@ -485,6 +491,9 @@ def setup(app, context):
         disc_val = _int_or_none(disc)
         genres_list = [g.strip() for g in genres.split(',') if g.strip()]
         authors_list = [a.strip() for a in authors.split(',') if a.strip()]
+        notation_indices = None if notation_tracks == 'default' else {
+            int(value) for value in notation_tracks.split(',') if value.strip()
+        }
 
         progress_queue: asyncio.Queue = asyncio.Queue()
 
@@ -503,6 +512,7 @@ def setup(app, context):
                     genres=genres_list, mbid=mbid.strip(),
                     isrc=isrc.strip(), language=language.strip(),
                     authors=authors_list,
+                    notation_track_indices=notation_indices,
                     audio_mode=audio_mode,
                     user_audio_path=user_audio_path,
                     cover_path=cover_path,
@@ -562,6 +572,30 @@ def setup(app, context):
             pass
 
         await websocket.close()
+
+    @app.post('/api/plugins/feedpakr/validate')
+    def validate_existing_feedpak(data: dict):
+        """Validate one existing DLC-relative feedpak without rebuilding it."""
+        dlc = _get_dlc_dir()
+        if not dlc:
+            return {'error': 'DLC folder not configured'}
+        rel = str((data or {}).get('path') or '').strip()
+        if not rel:
+            return {'error': 'path is required'}
+        dlc_root = Path(dlc).resolve()
+        target = (dlc_root / rel).resolve()
+        try:
+            target.relative_to(dlc_root)
+        except ValueError:
+            return {'error': 'Path escapes the DLC folder'}
+        if target.suffix.lower() != '.feedpak' or not target.is_file():
+            return {'error': 'Feedpak file not found'}
+        try:
+            report = _validate.validate_feedpak_file(target)
+        except Exception as exc:
+            _log.warning('feedpakr: validation failed for %r', rel, exc_info=True)
+            return {'error': str(exc)}
+        return {'ok': not report, 'validation': report}
 
     @app.get('/api/plugins/feedpakr/sloppaks')
     async def list_sloppaks():
