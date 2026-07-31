@@ -276,6 +276,61 @@ def setup(app, context):
         """
         await websocket.accept()
 
+        # Validate request body upfront
+        if audio_mode not in ('midi', 'embedded', 'sync', 'none'):
+            await websocket.send_json({'error': f'Invalid audio_mode: {audio_mode!r}'})
+            await websocket.close()
+            return
+
+        try:
+            track_indices = [int(x) for x in tracks.split(',') if x.strip() != '']
+        except ValueError:
+            await websocket.send_json({'error': 'Invalid tracks parameter'})
+            await websocket.close()
+            return
+
+        if not track_indices:
+            await websocket.send_json({'error': 'No tracks selected'})
+            await websocket.close()
+            return
+
+        # Check for required audio dependencies upfront
+        if audio_mode == 'midi':
+            try:
+                import gp2midi
+                if gp2midi is None:
+                    raise ImportError
+            except ImportError:
+                await websocket.send_json({
+                    'error': 'Audio synthesis requires gp2midi, not installed on this host.'
+                })
+                await websocket.close()
+                return
+
+        if audio_mode == 'embedded':
+            try:
+                import gp8_audio_sync
+                if gp8_audio_sync is None:
+                    raise ImportError
+            except ImportError:
+                await websocket.send_json({
+                    'error': 'Embedded audio extraction requires gp8_audio_sync, not installed on this host.'
+                })
+                await websocket.close()
+                return
+
+        if audio_mode == 'sync':
+            # Check for ffmpeg (required for transcode_to_ogg)
+            result = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: __import__('shutil').which('ffmpeg')
+            )
+            if not result:
+                await websocket.send_json({
+                    'error': 'Autosync requires ffmpeg, not found on this host.'
+                })
+                await websocket.close()
+                return
+
         dlc = _get_dlc_dir()
         if not dlc:
             await websocket.send_json({'error': 'DLC folder not configured'})
@@ -288,13 +343,6 @@ def setup(app, context):
             entry = None
         if entry is None or not Path(entry['gp_path']).exists():
             await websocket.send_json({'error': 'File expired — please upload again'})
-            await websocket.close()
-            return
-
-        try:
-            track_indices = [int(x) for x in tracks.split(',') if x.strip() != '']
-        except ValueError:
-            await websocket.send_json({'error': 'Invalid tracks parameter'})
             await websocket.close()
             return
 

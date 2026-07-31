@@ -80,6 +80,21 @@ def autosync_audio(gp_path: str, audio_path: str, progress_cb=None):
         return 0.0, [], str(e)
 
 
+def get_audio_duration(audio_path: str) -> float | None:
+    """Get audio duration in seconds using ffprobe. Returns None on failure."""
+    try:
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+             '-of', 'default=noprint_wrappers=1:nokey=1:nokey=1', str(audio_path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            return float(result.stdout.strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+        pass
+    return None
+
+
 def transcode_to_ogg(src_path: str, out_path: str, timeout: int = 120):
     """Normalize an arbitrary user-supplied/fetched audio file to OGG so
     every non-embedded, non-synthesized stem meets the feedpak-spec
@@ -132,9 +147,13 @@ def download_youtube_audio(url: str, out_dir: str, timeout: int = 300):
     ogg_path = Path(out_dir) / 'youtube_audio.ogg'
     if ogg_path.exists():
         return str(ogg_path), None
-    # yt_dlp/ffmpeg unavailable postprocessor fallback — whatever extension
-    # landed, still usable (transcode_to_ogg normalizes it downstream).
-    candidates = list(Path(out_dir).glob('youtube_audio.*'))
+    # yt_dlp/ffmpeg unavailable postprocessor fallback — only accept completed
+    # downloads, exclude .part and .ytdl files from incomplete/aborted downloads.
+    VALID_AUDIO_FORMATS = {'.mp3', '.m4a', '.wav', '.webm', '.mkv', '.flv'}
+    candidates = [
+        p for p in Path(out_dir).glob('youtube_audio.*')
+        if p.suffix.lower() in VALID_AUDIO_FORMATS
+    ]
     if candidates:
         return str(candidates[0]), None
     return None, 'Download completed but no audio file was found.'

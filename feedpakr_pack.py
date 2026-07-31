@@ -62,6 +62,7 @@ def assemble_manifest(
     title: str,
     artist: str,
     album: str = '',
+    authors: list[str] | None = None,
     year: int | None = None,
     duration: float,
     arrangements: list[dict],
@@ -84,6 +85,8 @@ def assemble_manifest(
     }
     if album:
         manifest['album'] = album
+    if authors:
+        manifest['authors'] = authors
     if year:
         manifest['year'] = int(year)
     manifest['duration'] = float(duration)

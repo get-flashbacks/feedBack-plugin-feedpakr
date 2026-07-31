@@ -188,6 +188,29 @@ def _gpif_capo_lookup(gp_path: str) -> dict[int, int]:
     return result
 
 
+def _extract_authors(gp_path: str) -> list[str]:
+    """Extract authors/tabber information from GP file. Returns a list of
+    author names (or empty list if none found)."""
+    authors: list[str] = []
+    try:
+        if _is_gpif(gp_path):
+            root = gp2rs_gpx._load_gpif(gp_path)
+            score = root.find('Score')
+            if score is not None:
+                tabber = (score.findtext('Tabber') or '').strip()
+                if tabber:
+                    authors.append(tabber)
+        else:
+            gp_song = guitarpro.parse(gp_path)
+            if gp_song and hasattr(gp_song, 'tab') and gp_song.tab:
+                tabber = str(gp_song.tab).strip()
+                if tabber:
+                    authors.append(tabber)
+    except Exception:
+        log.warning('authors: extraction failed', exc_info=True)
+    return authors
+
+
 def _gpif_has_repeat_markup(gp_path: str) -> bool:
     """True if the score uses repeat brackets / volta endings that GPIF
     conversion (unlike the GP3-5 path) does not currently expand."""
@@ -550,6 +573,17 @@ def build_feedpak(
             warnings.append('No sections/beats found in the source file.')
         duration = float(song_meta.song_length) if song_meta else 0.0
 
+        # Validate audio duration against chart duration (±5% tolerance)
+        if audio_path and duration > 0.0:
+            audio_duration = audio_mod.get_audio_duration(audio_path)
+            if audio_duration is not None:
+                tolerance = duration * 0.05
+                if abs(audio_duration - duration) > tolerance:
+                    warnings.append(
+                        f'Audio duration mismatch: audio is {audio_duration:.1f}s but chart is {duration:.1f}s. '
+                        'Check that the correct audio file was uploaded.'
+                    )
+
         report('Extracting lyrics…', 72)
         if lyrics_entries is None and not is_gpif and gp_song is not None and song_meta is not None:
             try:
@@ -576,10 +610,12 @@ def build_feedpak(
             except Exception as e:
                 warnings.append(f'Key signature extraction failed: {e}')
 
+        authors = _extract_authors(gp_path)
         manifest = pack.assemble_manifest(
             title=use_title,
             artist=use_artist,
             album=use_album,
+            authors=authors if authors else None,
             duration=duration,
             arrangements=arrangement_entries,
             stem_file=(f'stems/full{Path(audio_path).suffix.lower()}' if audio_path else None),
