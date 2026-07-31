@@ -491,13 +491,21 @@ def build_feedpak(
                 except Exception as e:
                     warnings.append(f'Hand-shape derivation failed for {arr.name}: {e}')
 
-            # Known host gap (gp2rs_gpx.convert_file's chord-template builder):
-            # when a chord occurrence has two notes on the same string, only
-            # the last one survives into that template's single-fret-per-
-            # string diagram summary. The per-occurrence note data itself
-            # (what's actually played) is unaffected — chord.notes always
-            # keeps every note — this only makes the auto-generated chord
-            # diagram/name preview incomplete for that shape.
+            # Known host gap in BOTH gp2rs.py and gp2rs_gpx.py's chord-template
+            # builders (not gp2rs_gpx-only, despite this warning's original
+            # wording — confirmed by reproducing it on a plain .gp5 piano
+            # track, which never touches gp2rs_gpx): when a chord occurrence
+            # has two notes on the same string, only the last one survives
+            # into that template's single-fret-per-string diagram summary.
+            # Real for piano/keys/drum tracks (their string index is a MIDI
+            # bucket — string = midi // 24 — so two genuinely different
+            # pitches routinely collide on the same "string"); essentially
+            # impossible for guitar/bass, where a same-string collision would
+            # mean two different frets fingered on one physical string at
+            # once. The per-occurrence note data itself (what's actually
+            # played) is unaffected — chord.notes always keeps every note —
+            # this only makes the auto-generated chord diagram/name preview
+            # incomplete for that shape.
             same_string_collisions = sum(
                 1 for c in wire.get('chords', [])
                 if len({n['s'] for n in c.get('notes', [])}) < len(c.get('notes', []))
@@ -506,8 +514,8 @@ def build_feedpak(
                 warnings.append(
                     f'{same_string_collisions} chord(s) in "{arr.name}" have two notes on '
                     'the same string — the auto-generated chord-diagram summary only shows '
-                    'one of them (a known gp2rs_gpx host limitation), but the actual playable '
-                    'note data for both is intact.'
+                    'one of them (a known host limitation, most common on piano/keys tracks), '
+                    'but the actual playable note data for both is intact.'
                 )
 
             try:
