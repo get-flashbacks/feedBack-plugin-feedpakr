@@ -1,4 +1,5 @@
 import sys
+import importlib
 from pathlib import Path
 
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
@@ -14,3 +15,8 @@ sys.path.insert(0, str(PLUGIN_DIR))
 # isn't there — e.g. in an environment that only has this one repo.
 if HOST_LIB_DIR.is_dir():
     sys.path.insert(0, str(HOST_LIB_DIR))
+
+
+import feedpakr_pipeline
+
+feedpakr_pipeline.configure_sibling_loader(importlib.import_module)
