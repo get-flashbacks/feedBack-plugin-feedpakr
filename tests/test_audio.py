@@ -1,9 +1,36 @@
 """Tests for feedpakr_audio.py."""
 
 from pathlib import Path
+from types import SimpleNamespace
 import pytest
 
 import feedpakr_audio as audio_mod
+
+
+@pytest.mark.parametrize(('frame_padding_offset', 'chart_offset'), [
+    (-2.0, 2.0),
+    (0.0, 0.0),
+    (1.25, -1.25),
+])
+def test_embedded_audio_normalizes_gp8_offset_for_chart_times(
+        tmp_path, monkeypatch, frame_padding_offset, chart_offset):
+    """GP8 positions audio relative to bar 1; gp2rs shifts chart events."""
+    extracted = tmp_path / 'embedded.ogg'
+    extracted.write_bytes(b'OggS')
+    fake_sync = SimpleNamespace(audio_offset=frame_padding_offset)
+    fake_module = SimpleNamespace(
+        has_embedded_audio=lambda _path: True,
+        extract_audio=lambda _path, _out: str(extracted),
+        extract_sync=lambda _path: fake_sync,
+    )
+    monkeypatch.setattr(audio_mod, 'gp8_audio_sync', fake_module)
+
+    path, offset, error = audio_mod.extract_embedded_audio(
+        str(tmp_path / 'song.gp'), str(tmp_path))
+
+    assert path == str(extracted)
+    assert offset == chart_offset
+    assert error is None
 
 
 def test_transcode_to_ogg_skips_ogg_files(tmp_path):
