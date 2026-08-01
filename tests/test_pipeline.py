@@ -219,6 +219,94 @@ def test_build_feedpak_rejects_failed_requested_audio(monkeypatch):
 
 # ── GPIF (.gp / .gpx, GP6/7/8) ────────────────────────────────────────────
 
+@fixture_available
+def test_build_feedpak_existing_pack_mode_keeps_original_stems_and_cover(tmp_path, monkeypatch):
+    """'existing_pack' audio mode: the chart is freshly parsed from GP, but
+    audio/stems/cover are reused byte-for-byte from a previously-uploaded
+    pack (feedpakr_upgrade.extract_pack_assets' return shape) instead of
+    being synthesized/embedded/re-recorded."""
+    guitar_path = tmp_path / 'guitar.ogg'
+    guitar_path.write_bytes(b'OggS-guitar')
+    vocals_path = tmp_path / 'vocals.ogg'
+    vocals_path.write_bytes(b'OggS-vocals')
+    cover_path = tmp_path / 'cover.jpg'
+    cover_path.write_bytes(b'\xff\xd8\xff-jpeg')
+
+    existing_pack = {
+        'stems': [
+            {'id': 'guitar', 'file': str(guitar_path), 'name': 'Guitar'},
+            {'id': 'vocals', 'file': str(vocals_path)},
+        ],
+        'full_mix_path': None,
+        'cover_path': str(cover_path),
+        'sync_reference_path': str(guitar_path),  # irrelevant once _resolve_audio is stubbed
+    }
+    # Autosync itself (chroma-DTW/librosa) is exercised by feedpakr_audio's
+    # own tests — stub _resolve_audio here so this test stays about the
+    # existing_pack plumbing (extra stems + cover fallback), not autosync.
+    monkeypatch.setattr(pipeline, '_resolve_audio', lambda *a, **k: (None, 0.0))
+
+    result = pipeline.build_feedpak(
+        str(MONEY_GP5),
+        track_indices=[3],
+        arrangement_names={3: 'Bass'},
+        audio_mode='existing_pack',
+        existing_pack=existing_pack,
+        report=lambda stage, pct: None,
+    )
+
+    assert result['features']['real_audio'] is True
+    assert result['features']['already_separated'] is True
+    assert not any('authoring intermediate' in w for w in result['warnings'])
+
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
+        names = set(zf.namelist())
+        assert {'stems/guitar.ogg', 'stems/vocals.ogg', 'cover.jpg'} <= names
+        assert zf.read('stems/guitar.ogg') == b'OggS-guitar'
+        manifest = yaml.safe_load(zf.read('manifest.yaml'))
+
+    stem_ids = {s['id'] for s in manifest['stems']}
+    assert stem_ids == {'guitar', 'vocals'}
+    guitar_entry = next(s for s in manifest['stems'] if s['id'] == 'guitar')
+    assert guitar_entry['name'] == 'Guitar'
+    assert manifest['cover'] == 'cover.jpg'
+
+
+@fixture_available
+def test_build_feedpak_existing_pack_mode_with_full_mix_no_extra_stems(tmp_path, monkeypatch):
+    """A source pack whose only stem is 'full' (single unseparated mix)
+    reuses that mixdown directly — no extra_stems entries, same shape as
+    'sync'/'embedded' mode's single-stem output."""
+    full_path = tmp_path / 'full.ogg'
+    full_path.write_bytes(b'OggS-full')
+    existing_pack = {
+        'stems': [],
+        'full_mix_path': str(full_path),
+        'cover_path': None,
+        'sync_reference_path': str(full_path),
+    }
+    monkeypatch.setattr(pipeline, '_resolve_audio', lambda *a, **k: (str(full_path), 0.0))
+    monkeypatch.setattr(pipeline.audio_mod, 'get_audio_duration', lambda _path: None)
+
+    result = pipeline.build_feedpak(
+        str(MONEY_GP5),
+        track_indices=[3],
+        arrangement_names={3: 'Bass'},
+        audio_mode='existing_pack',
+        existing_pack=existing_pack,
+        report=lambda stage, pct: None,
+    )
+    assert result['features']['already_separated'] is False
+
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
+        manifest = yaml.safe_load(zf.read('manifest.yaml'))
+    assert manifest['stems'] == [{'id': 'full', 'file': 'stems/full.ogg', 'default': True}]
+
+
 @gp8_fixture_available
 def test_parse_gp_gpif_detects_vocal_track():
     parsed = pipeline.parse_gp(str(MONEY_GP8))

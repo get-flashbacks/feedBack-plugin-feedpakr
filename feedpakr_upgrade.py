@@ -301,3 +301,139 @@ def upgrade_sloppak(sloppak_path: str) -> dict:
         'artist': new_manifest.get('artist', ''),
         'features': {'real_audio': real_audio},
     }
+
+
+# ── Existing-pack audio reuse (feedpakr's 'existing_pack' audio mode) ──────
+#
+# Lets a GP re-import keep a pack's original audio/stems/cover instead of
+# synthesizing/embedding/re-recording — "upload a sloppak/feedpak, then
+# re-import the GP file on top of it": the chart (arrangements, timeline,
+# tones, capo, notation, keys) is fully replaced by the fresh GP parse, but
+# the audio side is reused byte-for-byte from the uploaded pack, with the
+# new chart's timing re-aligned to it via the same chroma-DTW autosync used
+# for a user-supplied recording.
+
+def extract_pack_assets(pack_path: str | Path, out_dir: str | Path) -> dict:
+    """Extract every stem, the reserved 'full' mixdown (if present), and the
+    cover image from an existing .sloppak/.feedpak into out_dir.
+
+    Returns:
+        {'stems': [{'id', 'file' (absolute path), 'name'?}, ...],
+         'full_mix_path': str | None,
+         'cover_path': str | None,
+         'sync_reference_path': str | None,
+         'error': str | None}
+
+    sync_reference_path is full_mix_path when the pack has one; otherwise
+    it's an ffmpeg-mixed-down reference built from the separated stems,
+    used ONLY to autosync the freshly-imported chart — it is never itself
+    written into the output pack. On any failure this returns a dict with
+    a non-empty 'error' rather than raising, matching every other
+    best-effort function in this plugin.
+    """
+    src = Path(pack_path)
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    try:
+        manifest = (
+            sloppak_mod.load_manifest(src) if sloppak_mod is not None
+            else _load_manifest_fallback(src)
+        )
+    except Exception as e:
+        return {'error': f'Could not read manifest: {e}'}
+
+    raw_stems = manifest.get('stems')
+    if not isinstance(raw_stems, list) or not raw_stems:
+        return {'error': 'This pack has no stems to reuse.'}
+
+    full_mix_path: str | None = None
+    stems: list[dict] = []
+    used_names: set[str] = set()
+    for s in raw_stems:
+        if not isinstance(s, dict):
+            continue
+        sid = str(s.get('id', ''))
+        sfile = str(s.get('file', ''))
+        if not sid or not sfile:
+            continue
+        data = _read_member(src, sfile)
+        if data is None:
+            continue
+        dest_name = Path(sfile).name
+        # Two stems sharing a basename (different source subdirs) would
+        # otherwise silently overwrite each other on disk.
+        if dest_name in used_names:
+            dest_name = f'{sid}_{dest_name}'
+        used_names.add(dest_name)
+        dest = out / dest_name
+        dest.write_bytes(data)
+        if sid == 'full':
+            full_mix_path = str(dest)
+        else:
+            entry = {'id': sid, 'file': str(dest)}
+            if isinstance(s.get('name'), str) and s['name'].strip():
+                entry['name'] = s['name'].strip()
+            stems.append(entry)
+
+    if full_mix_path is None and not stems:
+        return {'error': 'This pack has no stems to reuse.'}
+
+    cover_path: str | None = None
+    cover_rel = manifest.get('cover')
+    if isinstance(cover_rel, str) and cover_rel:
+        cdata = _read_member(src, cover_rel)
+        if cdata is not None:
+            cdest = out / Path(cover_rel).name
+            cdest.write_bytes(cdata)
+            cover_path = str(cdest)
+
+    sync_reference_path = full_mix_path
+    if sync_reference_path is None:
+        mix_out = out / 'sync_reference.ogg'
+        err = _mixdown_stems([s['file'] for s in stems], str(mix_out))
+        if err:
+            return {'error': f'Could not prepare audio for syncing: {err}'}
+        sync_reference_path = str(mix_out)
+
+    return {
+        'stems': stems,
+        'full_mix_path': full_mix_path,
+        'cover_path': cover_path,
+        'sync_reference_path': sync_reference_path,
+        'error': None,
+    }
+
+
+def _mixdown_stems(stem_paths: list[str], out_path: str, timeout: int = 120) -> str | None:
+    """ffmpeg amix of separated stems into one reference track, used only to
+    autosync a freshly-imported GP chart against a pack that has no 'full'
+    mixdown of its own. Returns an error string, or None on success."""
+    import shutil
+    import subprocess
+
+    if not stem_paths:
+        return 'No stems to mix.'
+    if len(stem_paths) == 1:
+        try:
+            shutil.copy2(stem_paths[0], out_path)
+            return None
+        except OSError as e:
+            return str(e)
+
+    cmd = ['ffmpeg', '-y']
+    for p in stem_paths:
+        cmd += ['-i', p]
+    cmd += [
+        '-filter_complex', f'amix=inputs={len(stem_paths)}:duration=longest:dropout_transition=0',
+        '-q:a', '6', out_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    except FileNotFoundError:
+        return 'ffmpeg not found — cannot mix stems for syncing.'
+    except subprocess.TimeoutExpired:
+        return 'ffmpeg mixdown timed out.'
+    if result.returncode != 0 or not Path(out_path).exists():
+        return f'ffmpeg mixdown failed: {result.stderr[-300:].decode(errors="replace")}'
+    return None

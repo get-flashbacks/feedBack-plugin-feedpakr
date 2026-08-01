@@ -18,6 +18,7 @@ let _buildDone = false;
 let _format = 'gp345';
 let _hasEmbeddedAudio = false;
 let _audioAttached = false;
+let _existingPackAttached = false;
 let _sloppaks = [];
 let _upgradeDone = false;
 let _handoffAvailability = { preview: null, split: null };
@@ -74,6 +75,13 @@ setTimeout(() => {
     if (audioFileInput) {
         audioFileInput.addEventListener('change', () => {
             if (audioFileInput.files[0]) fprHandleAudioFile(audioFileInput.files[0]);
+        });
+    }
+
+    const existingPackInput = document.getElementById('fpr-existing-pack-input');
+    if (existingPackInput) {
+        existingPackInput.addEventListener('change', () => {
+            if (existingPackInput.files[0]) fprHandleExistingPack(existingPackInput.files[0]);
         });
     }
 
@@ -157,6 +165,42 @@ async function fprHandleAudioFile(file) {
             if (status) status.textContent = `${file.name} attached — will be aligned to the chart during build.`;
         } catch (err) {
             if (status) status.textContent = `Audio upload failed: ${String(err)}`;
+        }
+    };
+    reader.readAsDataURL(file);
+}
+
+async function fprHandleExistingPack(file) {
+    if (!_uploadId) return;
+    const status = document.getElementById('fpr-existing-pack-status');
+    if (status) status.textContent = `Uploading ${file.name}…`;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        const b64 = e.target.result.split(',')[1];
+        try {
+            const resp = await fetch(`${API_BASE}/upload-existing-pack`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ upload_id: _uploadId, filename: file.name, data: b64 }),
+            });
+            const data = await resp.json();
+            if (data.error) {
+                if (status) status.textContent = `Upload failed: ${data.error}`;
+                return;
+            }
+            _existingPackAttached = true;
+            // Same reasoning as fprHandleAudioFile: force the matching mode
+            // radio so this attached pack can't silently go unused under
+            // whatever mode happened to be checked before the upload
+            // completed.
+            const existingRadio = document.querySelector('input[name="fpr-audio-mode"][value="existing_pack"]');
+            if (existingRadio) { existingRadio.checked = true; fprUpdateAudioModeUI(); }
+            const stemNote = data.stems.length ? `${data.stems.length} stem(s)` : null;
+            const mixNote = data.has_full_mix ? 'full mix' : null;
+            const parts = [stemNote, mixNote].filter(Boolean).join(' + ') || 'audio';
+            if (status) status.textContent = `${file.name} attached (${parts}) — will be aligned to the new chart during build.`;
+        } catch (err) {
+            if (status) status.textContent = `Upload failed: ${String(err)}`;
         }
     };
     reader.readAsDataURL(file);
@@ -271,6 +315,8 @@ function fprUpdateAudioModeUI() {
     const mode = selected ? selected.value : 'midi';
     const syncControls = document.getElementById('fpr-sync-controls');
     if (syncControls) syncControls.classList.toggle('hidden', mode !== 'sync');
+    const existingPackControls = document.getElementById('fpr-existing-pack-controls');
+    if (existingPackControls) existingPackControls.classList.toggle('hidden', mode !== 'existing_pack');
 
     // Grey out (rather than hide) modes the uploaded file can't support,
     // so the UI explains itself instead of options silently vanishing.
@@ -328,6 +374,7 @@ function fprShowParsed(data) {
     _format = data.format || 'gp345';
     _hasEmbeddedAudio = !!data.has_embedded_audio;
     _audioAttached = false;
+    _existingPackAttached = false;
     const defaultMode = document.querySelector(
         `input[name="fpr-audio-mode"][value="${_format === 'gpif' ? (_hasEmbeddedAudio ? 'embedded' : 'sync') : 'midi'}"]`
     );
@@ -404,6 +451,10 @@ async function fprBuild() {
 
     if (audioMode === 'sync' && !_audioAttached) {
         alert('Attach a recording (file upload or YouTube fetch) before building in sync mode, or pick a different audio option.');
+        return;
+    }
+    if (audioMode === 'existing_pack' && !_existingPackAttached) {
+        alert('Attach an existing .sloppak/.feedpak before building in re-chart mode, or pick a different audio option.');
         return;
     }
 
@@ -584,7 +635,7 @@ function fprShowResult(msg) {
             <p class="mt-2">${validityBadge}</p>
             ${featuresHtml}
             ${warningsHtml}
-            ${fprHandoffButtonsHtml(msg.filename_rel, !!f.real_audio)}
+            ${fprHandoffButtonsHtml(msg.filename_rel, !!f.real_audio && !f.already_separated)}
             <button onclick="fprReset()"
                 class="mt-4 px-4 py-2 bg-dark-600 hover:bg-dark-500 rounded-xl text-sm text-gray-300 transition">
                 Import Another
@@ -617,16 +668,21 @@ function fprReset() {
     _format = 'gp345';
     _hasEmbeddedAudio = false;
     _audioAttached = false;
+    _existingPackAttached = false;
     const fi = document.getElementById('fpr-file-input');
     if (fi) fi.value = '';
     const ci = document.getElementById('fpr-cover-input');
     if (ci) ci.value = '';
     const afi = document.getElementById('fpr-audio-file-input');
     if (afi) afi.value = '';
+    const epi = document.getElementById('fpr-existing-pack-input');
+    if (epi) epi.value = '';
     const yu = document.getElementById('fpr-youtube-url');
     if (yu) yu.value = '';
     const ss = document.getElementById('fpr-sync-status');
     if (ss) ss.textContent = '';
+    const eps = document.getElementById('fpr-existing-pack-status');
+    if (eps) eps.textContent = '';
     const midiRadio = document.querySelector('input[name="fpr-audio-mode"][value="midi"]');
     if (midiRadio) midiRadio.checked = true;
     fprUpdateAudioModeUI();

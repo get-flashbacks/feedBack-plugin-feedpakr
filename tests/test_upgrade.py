@@ -8,6 +8,7 @@ has (c:\\Users\\PC\\Downloads\\Alll\\export) — 21/21 upgraded fully spec-valid
 
 import io
 import json
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -16,6 +17,10 @@ import yaml
 
 import feedpakr_upgrade as upgrade
 import feedpakr_validate as validate
+
+ffmpeg_available = pytest.mark.skipif(
+    shutil.which('ffmpeg') is None, reason='ffmpeg not installed on this host'
+)
 
 
 def _write_sloppak(tmp_path: Path, manifest: dict, arrangements: dict[str, dict] | None = None) -> Path:
@@ -328,6 +333,131 @@ def test_fully_fixable_pack_ends_up_schema_valid(tmp_path):
     )
     result = upgrade.upgrade_sloppak(str(src))
     assert result['validation'] == {}
+
+
+# ── extract_pack_assets (feedpakr's 'existing_pack' audio mode) ────────────
+
+def _write_sloppak_with_files(tmp_path: Path, manifest: dict, files: dict[str, bytes]) -> Path:
+    """Like _write_sloppak, but also writes real byte content for every
+    manifest-referenced file (stems, cover) so extract_pack_assets has
+    something to actually read."""
+    src = tmp_path / 'song.sloppak'
+    src.mkdir()
+    (src / 'manifest.yaml').write_text(yaml.safe_dump(manifest, sort_keys=False), encoding='utf-8')
+    for rel, data in files.items():
+        path = src / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    return src
+
+
+def test_extract_pack_assets_full_mix_only(tmp_path):
+    src = _write_sloppak_with_files(
+        tmp_path,
+        {'title': 'T', 'artist': 'A', 'duration': 10.0,
+         'stems': [{'id': 'full', 'file': 'stems/full.ogg'}], 'arrangements': []},
+        {'stems/full.ogg': b'OggS-full-mix'},
+    )
+    result = upgrade.extract_pack_assets(src, tmp_path / 'out')
+    assert result['error'] is None
+    assert result['stems'] == []
+    assert Path(result['full_mix_path']).read_bytes() == b'OggS-full-mix'
+    # A full mix is used directly as the autosync reference — no mixdown needed.
+    assert result['sync_reference_path'] == result['full_mix_path']
+
+
+@ffmpeg_available
+def test_extract_pack_assets_separated_stems_no_full_mix(tmp_path):
+    src = _write_sloppak_with_files(
+        tmp_path,
+        {'title': 'T', 'artist': 'A', 'duration': 10.0,
+         'stems': [
+             {'id': 'guitar', 'file': 'stems/guitar.ogg', 'name': 'Guitar'},
+             {'id': 'vocals', 'file': 'stems/vocals.ogg'},
+         ], 'arrangements': []},
+        {'stems/guitar.ogg': b'OggS-guitar', 'stems/vocals.ogg': b'OggS-vocals'},
+    )
+    result = upgrade.extract_pack_assets(src, tmp_path / 'out')
+    assert result['error'] is None
+    assert result['full_mix_path'] is None
+    ids = {s['id'] for s in result['stems']}
+    assert ids == {'guitar', 'vocals'}
+    guitar_entry = next(s for s in result['stems'] if s['id'] == 'guitar')
+    assert guitar_entry['name'] == 'Guitar'
+    assert Path(guitar_entry['file']).read_bytes() == b'OggS-guitar'
+    # No 'full' mixdown to reuse as the sync reference — a mixdown gets
+    # built instead (single-stem shortcut here would just copy, but with
+    # two stems this exercises the ffmpeg amix path or its failure).
+    assert result['sync_reference_path'] is not None
+
+
+def test_extract_pack_assets_single_separated_stem_copies_for_sync(tmp_path):
+    """With exactly one non-'full' stem, the sync reference is a plain
+    copy — no ffmpeg mixdown needed."""
+    src = _write_sloppak_with_files(
+        tmp_path,
+        {'title': 'T', 'artist': 'A', 'duration': 10.0,
+         'stems': [{'id': 'guitar', 'file': 'stems/guitar.ogg'}], 'arrangements': []},
+        {'stems/guitar.ogg': b'OggS-solo-guitar'},
+    )
+    result = upgrade.extract_pack_assets(src, tmp_path / 'out')
+    assert result['error'] is None
+    assert Path(result['sync_reference_path']).read_bytes() == b'OggS-solo-guitar'
+
+
+def test_extract_pack_assets_extracts_cover(tmp_path):
+    src = _write_sloppak_with_files(
+        tmp_path,
+        {'title': 'T', 'artist': 'A', 'duration': 10.0,
+         'stems': [{'id': 'full', 'file': 'stems/full.ogg'}],
+         'cover': 'cover.jpg', 'arrangements': []},
+        {'stems/full.ogg': b'OggS-full', 'cover.jpg': b'\xff\xd8\xff-jpeg-bytes'},
+    )
+    result = upgrade.extract_pack_assets(src, tmp_path / 'out')
+    assert result['error'] is None
+    assert Path(result['cover_path']).read_bytes() == b'\xff\xd8\xff-jpeg-bytes'
+
+
+def test_extract_pack_assets_no_cover_key_yields_none(tmp_path):
+    src = _write_sloppak_with_files(
+        tmp_path,
+        {'title': 'T', 'artist': 'A', 'duration': 10.0,
+         'stems': [{'id': 'full', 'file': 'stems/full.ogg'}], 'arrangements': []},
+        {'stems/full.ogg': b'OggS-full'},
+    )
+    result = upgrade.extract_pack_assets(src, tmp_path / 'out')
+    assert result['cover_path'] is None
+
+
+def test_extract_pack_assets_no_stems_errors(tmp_path):
+    src = _write_sloppak_with_files(
+        tmp_path,
+        {'title': 'T', 'artist': 'A', 'duration': 10.0, 'stems': [], 'arrangements': []},
+        {},
+    )
+    result = upgrade.extract_pack_assets(src, tmp_path / 'out')
+    assert result['error'] is not None
+    assert 'no stems' in result['error'].lower()
+
+
+def test_extract_pack_assets_missing_manifest_errors(tmp_path):
+    missing = tmp_path / 'does-not-exist.feedpak'
+    result = upgrade.extract_pack_assets(missing, tmp_path / 'out')
+    assert result['error'] is not None
+
+
+def test_extract_pack_assets_zip_form(tmp_path):
+    """Works against a zip-form .feedpak, not just a dir-form .sloppak."""
+    zip_path = tmp_path / 'song.feedpak'
+    manifest = {'title': 'T', 'artist': 'A', 'duration': 10.0,
+                'stems': [{'id': 'full', 'file': 'stems/full.ogg'}], 'arrangements': []}
+    with zipfile.ZipFile(zip_path, 'w') as zf:
+        zf.writestr('manifest.yaml', yaml.safe_dump(manifest, sort_keys=False))
+        zf.writestr('stems/full.ogg', b'OggS-zipped-full')
+
+    result = upgrade.extract_pack_assets(zip_path, tmp_path / 'out')
+    assert result['error'] is None
+    assert Path(result['full_mix_path']).read_bytes() == b'OggS-zipped-full'
 
 
 # ── Real-fixture regression (the actual sample library) ────────────────────
