@@ -134,6 +134,7 @@ def setup(app, context):
     _meta_db = context['meta_db']
     _log = context['log']
     _pipeline = context['load_sibling']('feedpakr_pipeline')
+    _pipeline.configure_sibling_loader(context['load_sibling'])
     _pack = context['load_sibling']('feedpakr_pack')
     _audio = context['load_sibling']('feedpakr_audio')
     _upgrade = context['load_sibling']('feedpakr_upgrade')
