@@ -799,6 +799,7 @@ function fprShowUpgradeResults(results) {
 window.fprBuild = fprBuild;
 window.fprReset = fprReset;
 window.fprFetchYoutube = fprFetchYoutube;
+window.fprSearchCover = fprSearchCover;
 window.fprShowTab = fprShowTab;
 window.fprRefreshSloppaks = fprRefreshSloppaks;
 window.fprSelectAllSloppaks = fprSelectAllSloppaks;
