@@ -51,7 +51,11 @@ def extract_embedded_audio(gp_path: str, out_dir: str):
         if not path:
             return None, 0.0, 'Failed to extract embedded audio.'
         sync = gp8_audio_sync.extract_sync(gp_path)
-        offset = sync.audio_offset if sync else 0.0
+        # GP8 FramePadding describes where audio begins relative to bar 1:
+        # negative means the recording starts before the chart.  gp2rs uses
+        # the opposite convention (seconds added to chart events), so a
+        # two-second audio lead-in must move bar 1 forward by two seconds.
+        offset = -sync.audio_offset if sync else 0.0
         return path, offset, None
     except Exception as e:
         return None, 0.0, str(e)
