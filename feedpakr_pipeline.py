@@ -59,6 +59,7 @@ import feedpakr_handshapes as handshapes_mod
 import feedpakr_notation as notation_mod
 
 log = logging.getLogger('feedBack.plugin.feedpakr')
+_load_sibling = None
 
 _GP345_EXTS = {'.gp3', '.gp4', '.gp5'}
 _GPX_EXTS = {'.gpx', '.gp'}  # GP6 / GP7-8, GPIF XML path
@@ -68,6 +69,12 @@ ALLOWED_ARRANGEMENT_NAMES = {'Lead', 'Rhythm', 'Bass', 'Drums', 'Keys', 'Vocals'
 
 class UnsupportedFormatError(Exception):
     """Raised for a file extension feedpakr does not handle."""
+
+
+def configure_sibling_loader(load_sibling) -> None:
+    """Provide the host's namespaced sibling-module loader."""
+    global _load_sibling
+    _load_sibling = load_sibling
 
 
 def _require_core() -> None:
@@ -235,7 +242,9 @@ def _gpif_drumtab_from_wire(wire: dict, arrangement_name: str) -> tuple[dict, di
     so those optional drum-tab fields are deliberately omitted rather than
     fabricated.
     """
-    import drums as drums_mod
+    if _load_sibling is None:
+        raise RuntimeError('feedpakr sibling loader is not configured')
+    drums_mod = _load_sibling('drums')
 
     hits: list[dict] = []
     pieces_seen: dict[str, str] = {}
