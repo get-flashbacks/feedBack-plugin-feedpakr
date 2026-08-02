@@ -423,6 +423,7 @@ def setup(app, context):
         language: str = '',
         authors: str = '',
         notation_tracks: str = 'default',
+        combine_same_name: bool = False,
         audio_mode: str = 'midi',
     ):
         """Build a .feedpak from the uploaded GP file, stream progress.
@@ -435,6 +436,8 @@ def setup(app, context):
         genres/authors: comma-separated lists.
         notation_tracks: literal "default" uses the pipeline default; any
                 other value is a comma-separated list of track indices.
+        combine_same_name: merge compatible selected tracks whose arrangement
+                names match (case-insensitive).
         audio_mode: "midi" (GP3-5 FluidSynth synthesis), "embedded" (GP8's
                 own backing track), "sync" (a user-uploaded or YouTube-
                 fetched recording, aligned via autosync — needs
@@ -571,6 +574,7 @@ def setup(app, context):
                     isrc=isrc.strip(), language=language.strip(),
                     authors=authors_list,
                     notation_track_indices=notation_indices,
+                    combine_same_name=combine_same_name,
                     audio_mode=audio_mode,
                     user_audio_path=user_audio_path,
                     cover_path=cover_path,

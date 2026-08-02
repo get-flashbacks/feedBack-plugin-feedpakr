@@ -24,6 +24,7 @@ much data as possible" requirement).
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import tempfile
@@ -396,6 +397,112 @@ def _song_timeline_from_meta(loaded) -> dict | None:
     return timeline
 
 
+def _merge_arrangement_wires(base: dict, extra: dict) -> dict:
+    """Merge a second arrangement wire payload into ``base`` in place.
+
+    Chord template ids are local to each source arrangement, so references in
+    both chord occurrences and handshapes must be shifted before appending.
+    """
+    template_offset = len(base.get('templates', []))
+    base.setdefault('templates', []).extend(extra.get('templates', []))
+
+    def remap_chord_refs(container: dict) -> None:
+        for chord in container.get('chords', []):
+            if isinstance(chord.get('id'), int) and chord['id'] >= 0:
+                chord['id'] += template_offset
+        for shape in container.get('handshapes', []):
+            if isinstance(shape.get('chord_id'), int) and shape['chord_id'] >= 0:
+                shape['chord_id'] += template_offset
+
+    for chord in extra.get('chords', []):
+        copied = dict(chord)
+        remap_chord_refs({'chords': [copied]})
+        base.setdefault('chords', []).append(copied)
+    for shape in extra.get('handshapes', []):
+        copied = dict(shape)
+        remap_chord_refs({'handshapes': [copied]})
+        base.setdefault('handshapes', []).append(copied)
+
+    base.setdefault('notes', []).extend(extra.get('notes', []))
+    base.setdefault('anchors', []).extend(extra.get('anchors', []))
+    for key in ('notes', 'chords'):
+        base[key].sort(key=lambda item: item.get('t', 0))
+    for key, time_key in (('anchors', 'time'), ('handshapes', 'start_time')):
+        unique = {json.dumps(item, sort_keys=True): item for item in base.get(key, [])}
+        base[key] = sorted(unique.values(), key=lambda item: item.get(time_key, 0))
+
+    for phrase in extra.get('phrases', []):
+        for level in phrase.get('levels', []):
+            remap_chord_refs(level)
+        match = next((item for item in base.get('phrases', [])
+                      if item.get('start_time') == phrase.get('start_time')
+                      and item.get('end_time') == phrase.get('end_time')), None)
+        if match is None:
+            base.setdefault('phrases', []).append(phrase)
+            continue
+        match['max_difficulty'] = max(match.get('max_difficulty', 0), phrase.get('max_difficulty', 0))
+        by_difficulty = {level.get('difficulty'): level for level in match.get('levels', [])}
+        for level in phrase.get('levels', []):
+            target = by_difficulty.get(level.get('difficulty'))
+            if target is None:
+                match.setdefault('levels', []).append(level)
+                continue
+            for key in ('notes', 'chords', 'anchors', 'handshapes'):
+                target.setdefault(key, []).extend(level.get(key, []))
+    if base.get('phrases'):
+        base['phrases'].sort(key=lambda item: item.get('start_time', 0))
+
+    combined_tempos = base.get('tempos', []) + extra.get('tempos', [])
+    if combined_tempos:
+        unique = {json.dumps(item, sort_keys=True): item for item in combined_tempos}
+        base['tempos'] = sorted(unique.values(), key=lambda item: item.get('time', 0))
+
+    if extra.get('tones'):
+        if not base.get('tones'):
+            base['tones'] = extra['tones']
+        else:
+            changes = base['tones'].get('changes', []) + extra['tones'].get('changes', [])
+            unique = {json.dumps(item, sort_keys=True): item for item in changes}
+            base['tones']['changes'] = sorted(unique.values(), key=lambda item: item.get('time', 0))
+    return base
+
+
+def _combine_same_name_arrangements(entries: list[dict], files: dict[str, dict], warnings: list[str]) -> None:
+    """Combine compatible regular arrangements sharing a display name."""
+    kept: dict[str, dict] = {}
+    remove: list[dict] = []
+    for entry in entries:
+        if 'file' not in entry:
+            continue
+        key = (entry.get('name') or '').strip().casefold()
+        if not key:
+            continue
+        prior = kept.get(key)
+        if prior is None:
+            kept[key] = entry
+            continue
+        compatible = (
+            prior.get('tuning') == entry.get('tuning')
+            and prior.get('capo', 0) == entry.get('capo', 0)
+            and 'notation' not in prior and 'notation' not in entry
+        )
+        if not compatible:
+            warnings.append(
+                f'Could not combine same-name arrangement "{entry.get("name")}" because '
+                'its tuning, capo, or notation mode differs.'
+            )
+            continue
+        prior_file = Path(prior['file']).name
+        extra_file = Path(entry['file']).name
+        _merge_arrangement_wires(files[prior_file], files[extra_file])
+        del files[extra_file]
+        remove.append(entry)
+    for entry in remove:
+        entries.remove(entry)
+    if remove:
+        warnings.append(f'Combined {len(remove)} same-name track(s) into existing arrangements.')
+
+
 # ── Audio ────────────────────────────────────────────────────────────────
 
 _AUDIO_MODES = {'midi', 'embedded', 'sync', 'none'}
@@ -474,6 +581,7 @@ def build_feedpak(
     language: str = '',
     authors: list[str] | None = None,
     notation_track_indices: set[int] | None = None,
+    combine_same_name: bool = False,
     audio_mode: str = 'midi',
     user_audio_path: str | None = None,
     cover_path: str | None = None,
@@ -764,6 +872,9 @@ def build_feedpak(
                     warnings.append(f'Notation extraction failed for {arr.name}: {e}')
 
             arrangement_entries.append(entry)
+
+        if combine_same_name:
+            _combine_same_name_arrangements(arrangement_entries, arrangement_files, warnings)
 
         if not arrangement_entries:
             raise RuntimeError('None of the selected tracks could be converted.')

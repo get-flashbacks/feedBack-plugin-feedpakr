@@ -9,7 +9,8 @@ Plugin id: `feedpakr`. Install into `plugins/feedpakr/` (folder name must match 
 ## Status: Phase 4 (feature-complete for v1)
 
 - Upload a `.gp3`-`.gp5` (pyguitarpro) or `.gp6`/`.gpx`/`.gp` (GPIF, GP6-GP8) file, pick
-  which tracks to include and name their arrangements, attach cover art.
+  which tracks to include and name their arrangements, optionally combine compatible
+  same-name layered parts into one arrangement, and attach cover art.
 - Audio: synthesize with FluidSynth (.gp3-.gp5 only), use a GP8 file's embedded backing
   track, or sync a user-uploaded/YouTube-fetched recording to the chart via chroma-DTW
   autosync — or skip audio entirely.
