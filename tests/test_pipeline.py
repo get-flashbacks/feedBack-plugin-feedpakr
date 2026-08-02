@@ -99,6 +99,31 @@ def test_build_feedpak_extracts_all_16_sections():
 
 
 @fixture_available
+def test_build_feedpak_combines_compatible_same_name_tracks():
+    result = pipeline.build_feedpak(
+        str(MONEY_GP5),
+        track_indices=[1, 2],
+        arrangement_names={1: 'Rhythm', 2: 'Rhythm'},
+        combine_same_name=True,
+        audio_mode='none',
+        report=lambda stage, pct: None,
+    )
+    assert result['arrangement_count'] == 1
+
+    import io
+    import json
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
+        manifest = yaml.safe_load(zf.read('manifest.yaml'))
+        arrangement = json.loads(zf.read(manifest['arrangements'][0]['file']))
+    assert arrangement['notes'] or arrangement['chords']
+    assert all(0 <= chord['id'] < len(arrangement['templates'])
+               for chord in arrangement['chords'])
+    assert all(0 <= shape['chord_id'] < len(arrangement['templates'])
+               for shape in arrangement['handshapes'])
+
+
+@fixture_available
 def test_build_feedpak_cover_is_referenced_by_manifest(tmp_path):
     """End-to-end regression test for the cover.jpg-written-but-not-
     pointed-to bug: a cover_path must not just land in the zip, it must

@@ -400,6 +400,7 @@ async function fprBuild() {
     const authors = (document.getElementById('fpr-authors')?.value || '').trim();
     const audioModeInput = document.querySelector('input[name="fpr-audio-mode"]:checked');
     const audioMode = audioModeInput ? audioModeInput.value : 'midi';
+    const combineSameName = document.getElementById('fpr-combine-same-name')?.checked ? 'true' : 'false';
 
     if (audioMode === 'sync' && !_audioAttached) {
         alert('Attach a recording (file upload or YouTube fetch) before building in sync mode, or pick a different audio option.');
@@ -418,6 +419,7 @@ async function fprBuild() {
         album_artist: albumArtist, year, track_num: track, disc,
         genres, language, isrc, mbid, authors,
         notation_tracks: _format === 'gpif' ? notation : 'default',
+        combine_same_name: combineSameName,
         audio_mode: audioMode,
     });
     const ws = new WebSocket(`${WS_BASE}/build?${params}`);
