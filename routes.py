@@ -38,6 +38,11 @@ for the pattern this is deliberately consistent with):
     offset + sync points, without building anything — lets the UI show
     what alignment was found before committing to a build.
 
+  POST /api/plugins/feedpakr/upload-existing-pack
+    Attaches an existing .sloppak/.feedpak's audio to an upload token, for
+    the 'existing_pack' audio mode — re-imports the GP chart while keeping
+    that pack's original audio/stems/cover, re-aligned via autosync.
+
   WS   /ws/plugins/feedpakr/build
     Builds a .feedpak from the uploaded GP file, streaming progress
     messages, then writes it into the DLC folder and indexes it.
@@ -88,6 +93,10 @@ _validate = None
 _MAX_UPLOAD_BYTES = 30 * 1024 * 1024
 _MAX_COVER_BYTES = 8 * 1024 * 1024
 _MAX_AUDIO_BYTES = 60 * 1024 * 1024
+# Existing packs can carry several separated stems (guitar/bass/drums/
+# vocals/piano/other), each already-compressed audio — comfortably larger
+# than a single recording upload.
+_MAX_EXISTING_PACK_BYTES = 250 * 1024 * 1024
 
 # Server-side upload registry: opaque token -> {gp_path, cover_path, audio_path, ts}.
 # The build WS receives only the token, never a filesystem path — see the
@@ -404,6 +413,48 @@ def setup(app, context):
             return {'error': err}
         return {'offset': offset, 'sync_points': points}
 
+    @app.post('/api/plugins/feedpakr/upload-existing-pack')
+    async def upload_existing_pack(data: dict):
+        """Attach an existing .sloppak/.feedpak's audio to an upload token.
+
+        Extracts every stem, the reserved 'full' mixdown (if any), and the
+        cover art, so the build step can reuse them verbatim for the
+        'existing_pack' audio mode instead of synthesizing/embedding/
+        re-recording — re-importing the GP chart on top of a pack's audio."""
+        token = data.get('upload_id', '')
+        entry = _uploads.get(token)
+        if entry is None:
+            return {'error': 'Unknown or expired upload_id'}
+
+        pack_bytes = _decode_upload(
+            data, max_bytes=_MAX_EXISTING_PACK_BYTES,
+            allowed_exts={'.sloppak', '.feedpak'},
+        )
+        if isinstance(pack_bytes, dict):
+            return pack_bytes
+
+        filename = data.get('filename', 'existing.feedpak')
+        ext = Path(filename).suffix.lower() or '.feedpak'
+        pack_path = entry['dir'] / f'existing_pack{ext}'
+        pack_path.write_bytes(pack_bytes)
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None, _upgrade.extract_pack_assets,
+            pack_path, entry['dir'] / 'existing_pack_assets',
+        )
+        if result.get('error'):
+            return {'error': result['error']}
+
+        entry['existing_pack'] = result
+        return {
+            'ok': True,
+            'stems': [s['id'] for s in result['stems']],
+            'has_full_mix': bool(result.get('full_mix_path')),
+            'has_cover': bool(result.get('cover_path')),
+            'warnings': result.get('warnings', []),
+        }
+
     @app.websocket('/ws/plugins/feedpakr/build')
     async def ws_build(
         websocket: WebSocket,
@@ -441,13 +492,15 @@ def setup(app, context):
         audio_mode: "midi" (GP3-5 FluidSynth synthesis), "embedded" (GP8's
                 own backing track), "sync" (a user-uploaded or YouTube-
                 fetched recording, aligned via autosync — needs
-                upload-audio/youtube-audio to have been called first), or
-                "none".
+                upload-audio/youtube-audio to have been called first),
+                "existing_pack" (reuse an existing .sloppak/.feedpak's
+                audio/stems/cover, aligned via autosync — needs
+                upload-existing-pack to have been called first), or "none".
         """
         await websocket.accept()
 
         # Validate request body upfront
-        if audio_mode not in ('midi', 'embedded', 'sync', 'none'):
+        if audio_mode not in ('midi', 'embedded', 'sync', 'existing_pack', 'none'):
             await websocket.send_json({'error': f'Invalid audio_mode: {audio_mode!r}'})
             await websocket.close()
             return
@@ -529,6 +582,7 @@ def setup(app, context):
         gp_path = str(entry['gp_path'])
         cover_path = str(entry['cover_path']) if entry['cover_path'] else None
         user_audio_path = str(entry['audio_path']) if entry.get('audio_path') else None
+        existing_pack = entry.get('existing_pack')
         tmp_dir = entry['dir']
 
         def _int_or_none(s: str) -> int | None:
@@ -577,6 +631,7 @@ def setup(app, context):
                     combine_same_name=combine_same_name,
                     audio_mode=audio_mode,
                     user_audio_path=user_audio_path,
+                    existing_pack=existing_pack,
                     cover_path=cover_path,
                     report=_report,
                 )

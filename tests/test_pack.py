@@ -140,3 +140,70 @@ def test_write_feedpak_zip_audio_extension_follows_source(tmp_path):
     )
     with zipfile.ZipFile(io.BytesIO(pak_bytes)) as zf:
         assert 'stems/full.wav' in zf.namelist()
+
+
+def test_assemble_manifest_extra_stems_appended_after_full():
+    manifest = pack.assemble_manifest(
+        title='T', artist='A', duration=10.0,
+        arrangements=[],
+        stem_file='stems/full.ogg',
+        extra_stems=[
+            {'id': 'guitar', 'file': 'stems/guitar.ogg', 'name': 'Guitar'},
+            {'id': 'vocals', 'file': 'stems/vocals.ogg'},
+        ],
+    )
+    assert manifest['stems'] == [
+        {'id': 'full', 'file': 'stems/full.ogg', 'default': True},
+        {'id': 'guitar', 'file': 'stems/guitar.ogg', 'name': 'Guitar'},
+        {'id': 'vocals', 'file': 'stems/vocals.ogg'},
+    ]
+
+
+def test_assemble_manifest_extra_stems_without_full_mix():
+    """'existing_pack' packs with only separated stems (no reserved 'full'
+    mixdown) still get a valid, non-empty stems list."""
+    manifest = pack.assemble_manifest(
+        title='T', artist='A', duration=10.0,
+        arrangements=[],
+        stem_file=None,
+        extra_stems=[{'id': 'guitar', 'file': 'stems/guitar.ogg'}],
+    )
+    assert manifest['stems'] == [{'id': 'guitar', 'file': 'stems/guitar.ogg'}]
+
+
+def test_write_feedpak_zip_extra_stem_paths_copied_verbatim(tmp_path):
+    guitar_path = tmp_path / 'guitar.ogg'
+    guitar_path.write_bytes(b'OggS-guitar')
+    vocals_path = tmp_path / 'vocals.ogg'
+    vocals_path.write_bytes(b'OggS-vocals')
+
+    pak_bytes = pack.write_feedpak_zip(
+        manifest={'title': 'T'},
+        arrangement_files={},
+        extra_stem_paths=[
+            (str(guitar_path), 'stems/guitar.ogg'),
+            (str(vocals_path), 'stems/vocals.ogg'),
+        ],
+    )
+    with zipfile.ZipFile(io.BytesIO(pak_bytes)) as zf:
+        names = set(zf.namelist())
+        assert {'stems/guitar.ogg', 'stems/vocals.ogg'} <= names
+        assert zf.read('stems/guitar.ogg') == b'OggS-guitar'
+        assert zf.read('stems/vocals.ogg') == b'OggS-vocals'
+
+
+def test_write_feedpak_zip_full_mix_and_extra_stems_coexist(tmp_path):
+    full_path = tmp_path / 'full.ogg'
+    full_path.write_bytes(b'OggS-full')
+    guitar_path = tmp_path / 'guitar.ogg'
+    guitar_path.write_bytes(b'OggS-guitar')
+
+    pak_bytes = pack.write_feedpak_zip(
+        manifest={'title': 'T'},
+        arrangement_files={},
+        audio_path=str(full_path),
+        extra_stem_paths=[(str(guitar_path), 'stems/guitar.ogg')],
+    )
+    with zipfile.ZipFile(io.BytesIO(pak_bytes)) as zf:
+        names = set(zf.namelist())
+        assert {'stems/full.ogg', 'stems/guitar.ogg'} <= names

@@ -142,6 +142,10 @@
                     <input type="radio" name="fpr-audio-mode" value="sync" class="accent-blue-500">
                     Sync to a recording (upload a file or fetch from YouTube)
                 </label>
+                <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none" data-audio-mode-row="existing_pack">
+                    <input type="radio" name="fpr-audio-mode" value="existing_pack" class="accent-blue-500">
+                    Re-chart: reuse audio/stems/cover from an existing .sloppak/.feedpak
+                </label>
                 <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none" data-audio-mode-row="none">
                     <input type="radio" name="fpr-audio-mode" value="none" class="accent-blue-500">
                     No audio (add stems later)
@@ -162,6 +166,19 @@
                     </button>
                 </div>
                 <div id="fpr-sync-status" class="text-xs text-gray-500"></div>
+            </div>
+
+            <div id="fpr-existing-pack-controls" class="hidden pl-6 border-l border-gray-800">
+                <p class="text-xs text-gray-600 mb-2">
+                    The chart (arrangements, sections, tones, capo, notation, keys) is fully
+                    replaced by this GP file. Audio, stems, and cover art come from the
+                    uploaded pack untouched, re-aligned to the new chart via autosync.
+                </p>
+                <div class="flex gap-2 mb-2">
+                    <input type="file" id="fpr-existing-pack-input" accept=".sloppak,.feedpak"
+                        class="text-xs text-gray-400 flex-1">
+                </div>
+                <div id="fpr-existing-pack-status" class="text-xs text-gray-500"></div>
             </div>
         </div>
         <div class="bg-dark-700 border border-gray-800 rounded-xl p-5 mb-4">

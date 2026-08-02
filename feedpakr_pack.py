@@ -29,6 +29,12 @@ def sanitize_filename_component(text: str, max_len: int = 60) -> str:
     return cleaned[:max_len] or 'untitled'
 
 
+def sanitize_stem_id_component(text: str, fallback: str = 'stem', max_len: int = 60) -> str:
+    """Return a safe single path component for manifest-derived stem ids."""
+    cleaned = sanitize_filename_component(text, max_len=max_len).replace('.', '_').strip('_')
+    return cleaned or fallback
+
+
 def unique_output_path(out_dir: str | Path, base_name: str, ext: str = '.feedpak') -> Path:
     """Return a non-colliding path under out_dir, appending _2, _3, … as needed."""
     out_dir = Path(out_dir)
@@ -74,6 +80,7 @@ def assemble_manifest(
     duration: float,
     arrangements: list[dict],
     stem_file: str | None,
+    extra_stems: list[dict] | None = None,
     cover_file: str | None = None,
     song_timeline_present: bool = False,
     lyrics_present: bool = False,
@@ -84,8 +91,12 @@ def assemble_manifest(
 
     stem_file is the manifest-relative path of the packed full mixdown
     (e.g. "stems/full.ogg" or "stems/full.wav"), or None when no audio
-    could be produced. cover_file is the manifest-relative path of the
-    packed cover image (e.g. "cover.jpg"), or None when there isn't one —
+    could be produced. extra_stems is an optional list of additional stem
+    entries (`{'id', 'file', 'name'?}`, file already manifest-relative) —
+    used by the 'existing_pack' audio mode, which keeps a source pack's
+    original separated stems instead of collapsing everything to one
+    mixdown. cover_file is the manifest-relative path of the packed cover
+    image (e.g. "cover.jpg"), or None when there isn't one —
     per spec §2.2 ("nothing is auto-discovered by scanning; a Reader MUST
     NOT rely on filename"), writing cover.jpg into the zip without also
     pointing the manifest's `cover` key at it means a compliant Reader
@@ -134,10 +145,16 @@ def assemble_manifest(
     # still written so the caller can inspect/fix it, but it will not pass
     # strict validation until audio is added. That is surfaced as a
     # warning by the pipeline, not hidden here.
-    manifest['stems'] = (
+    stems_list: list[dict] = (
         [{'id': 'full', 'file': stem_file, 'default': True}]
         if stem_file else []
     )
+    for s in (extra_stems or []):
+        entry = {'id': s['id'], 'file': s['file']}
+        if s.get('name'):
+            entry['name'] = s['name']
+        stems_list.append(entry)
+    manifest['stems'] = stems_list
     if cover_file:
         manifest['cover'] = cover_file
 
@@ -165,6 +182,7 @@ def write_feedpak_zip(
     drum_tab_files: dict[str, dict] | None = None,
     notation_files: dict[str, dict] | None = None,
     audio_path: str | Path | None = None,
+    extra_stem_paths: list[tuple[str | Path, str]] | None = None,
     cover_path: str | Path | None = None,
 ) -> bytes:
     """Assemble a .feedpak zip in memory and return its bytes.
@@ -175,6 +193,11 @@ def write_feedpak_zip(
     (spec §7 side files, not under arrangements/) — their filenames must
     already match what the corresponding arrangement entry's `drum_tab`
     / `notation` pointer says.
+
+    extra_stem_paths is an optional list of (source_path, dest_rel) pairs
+    copied into the zip verbatim (dest_rel e.g. "stems/guitar.ogg") —
+    written alongside audio_path's "full" mixdown, keeping the
+    manifest-relative names assemble_manifest's extra_stems used.
     """
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -205,6 +228,9 @@ def write_feedpak_zip(
         if audio_path and Path(audio_path).exists():
             stem_ext = Path(audio_path).suffix.lower() or '.ogg'
             zf.write(audio_path, f'stems/full{stem_ext}')
+        for src, dest_rel in (extra_stem_paths or []):
+            if src and Path(src).exists():
+                zf.write(src, dest_rel)
         if cover_path and Path(cover_path).exists():
             ext = Path(cover_path).suffix.lower() or '.jpg'
             zf.write(cover_path, f'cover{ext}')

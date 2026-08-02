@@ -516,10 +516,16 @@ def _resolve_audio(
     tmp_dir: Path,
     warnings: list[str],
     report,
+    existing_pack: dict | None = None,
 ) -> tuple[str | None, float]:
     """Returns (audio_path, offset). audio_path is None on any failure —
     callers treat that as the §5.3.2 authoring-intermediate carve-out, not
-    a hard error."""
+    a hard error.
+
+    For audio_mode == 'existing_pack', audio_path is the source pack's
+    'full' mixdown when it has one (None if it only has separated stems —
+    those are packed separately by the caller via existing_pack['stems'],
+    not through this return value)."""
     if audio_mode == 'none':
         report('Audio skipped (unchecked).', 15)
         return None, 0.0
@@ -557,6 +563,19 @@ def _resolve_audio(
             return None, 0.0
         return normalized, offset
 
+    if audio_mode == 'existing_pack':
+        if not existing_pack or not existing_pack.get('sync_reference_path'):
+            warnings.append('Audio skipped: no existing pack was attached.')
+            return None, 0.0
+        report('Aligning audio to the chart…', 15)
+        offset, _points, err = audio_mod.autosync_audio(
+            gp_path, existing_pack['sync_reference_path'],
+        )
+        if err:
+            warnings.append(f'Autosync failed ({err}) — using the existing pack\'s audio with a zero offset.')
+            offset = 0.0
+        return existing_pack.get('full_mix_path'), offset
+
     warnings.append(f'Audio skipped: unknown audio mode {audio_mode!r}.')
     return None, 0.0
 
@@ -584,6 +603,7 @@ def build_feedpak(
     combine_same_name: bool = False,
     audio_mode: str = 'midi',
     user_audio_path: str | None = None,
+    existing_pack: dict | None = None,
     cover_path: str | None = None,
     report=lambda stage, pct: None,
 ) -> dict:
@@ -600,12 +620,21 @@ def build_feedpak(
     Raises UnsupportedFormatError / RuntimeError only for conditions that
     make the whole import meaningless (unreadable file, no tracks
     selected) — everything else degrades into `warnings`.
+
+    existing_pack (audio_mode == 'existing_pack' only): the dict returned
+    by feedpakr_upgrade.extract_pack_assets() — re-imports the GP chart
+    while reusing a previously-uploaded pack's audio/stems/cover
+    byte-for-byte, re-aligned to the new chart via autosync. When
+    cover_path isn't separately supplied, existing_pack's cover is used.
     """
     _require_core()
     _check_extension(gp_path)
 
     if not track_indices:
         raise RuntimeError('No tracks selected.')
+
+    if not cover_path and existing_pack and existing_pack.get('cover_path'):
+        cover_path = existing_pack['cover_path']
 
     is_gpif = _is_gpif(gp_path)
     warnings: list[str] = []
@@ -645,8 +674,17 @@ def build_feedpak(
         report('Generating audio…', 10)
         audio_path, audio_offset = _resolve_audio(
             gp_path, track_indices, audio_mode, user_audio_path, tmp_dir, warnings, report,
+            existing_pack=existing_pack,
         )
-        if audio_mode != 'none' and audio_path is None:
+        # 'existing_pack' with only separated stems and no 'full' mixdown
+        # legitimately returns audio_path=None from _resolve_audio — the
+        # real audio lives in existing_pack['stems'], packed further down.
+        # Only treat a None audio_path as fatal when there's truly nothing
+        # to fall back on.
+        has_existing_pack_stems = bool(
+            audio_mode == 'existing_pack' and existing_pack and existing_pack.get('stems')
+        )
+        if audio_mode != 'none' and audio_path is None and not has_existing_pack_stems:
             detail = warnings[-1] if warnings else 'Audio could not be produced.'
             raise RuntimeError(detail)
 
@@ -929,6 +967,24 @@ def build_feedpak(
             except Exception as e:
                 warnings.append(f'Key signature extraction failed: {e}')
 
+        # 'existing_pack' mode carries its separated stems alongside (or
+        # instead of) audio_path's 'full' mixdown — reused byte-for-byte
+        # from the uploaded pack rather than collapsed into one mixdown.
+        extra_stems_manifest: list[dict] | None = None
+        extra_stem_paths: list[tuple[Path, str]] | None = None
+        if has_existing_pack_stems:
+            extra_stems_manifest = []
+            extra_stem_paths = []
+            for s in existing_pack['stems']:
+                stem_src = Path(s['file'])
+                stem_id = pack.sanitize_stem_id_component(str(s.get('id', '')))
+                dest_rel = f"stems/{stem_id}{stem_src.suffix.lower() or '.ogg'}"
+                stem_entry = {'id': stem_id, 'file': dest_rel}
+                if s.get('name'):
+                    stem_entry['name'] = s['name']
+                extra_stems_manifest.append(stem_entry)
+                extra_stem_paths.append((stem_src, dest_rel))
+
         resolved_authors = authors or _extract_authors(gp_path)
         manifest = pack.assemble_manifest(
             title=use_title,
@@ -946,6 +1002,7 @@ def build_feedpak(
             duration=duration,
             arrangements=arrangement_entries,
             stem_file=(f'stems/full{Path(audio_path).suffix.lower()}' if audio_path else None),
+            extra_stems=extra_stems_manifest,
             cover_file=(
                 f'cover{Path(cover_path).suffix.lower() or ".jpg"}'
                 if cover_path and Path(cover_path).exists() else None
@@ -955,7 +1012,7 @@ def build_feedpak(
             keys_present=keys_data is not None,
             vocal_pitch_present=vocal_pitch_data is not None,
         )
-        if audio_path is None:
+        if audio_path is None and not extra_stems_manifest:
             warnings.append(
                 'No audio stem — this pack is an authoring intermediate and '
                 'will not validate until audio is added.'
@@ -985,6 +1042,7 @@ def build_feedpak(
             drum_tab_files=drum_tab_files,
             notation_files=notation_files,
             audio_path=audio_path,
+            extra_stem_paths=extra_stem_paths,
             cover_path=cover_path,
         )
 
@@ -1012,8 +1070,14 @@ def build_feedpak(
                     arr.get('tones') for arr in arrangement_files.values()
                 ),
                 'real_audio': bool(
-                    audio_path and audio_mode in {'embedded', 'sync'}
+                    (audio_path and audio_mode in {'embedded', 'sync', 'existing_pack'})
+                    or extra_stems_manifest
                 ),
+                # The pack already carries the source's separated stems —
+                # offering "Split Stems" on top would try to re-split an
+                # already-separated mix (or find nothing to split, when
+                # there's no 'full' mixdown at all).
+                'already_separated': bool(extra_stems_manifest),
             },
         }
     finally:
