@@ -977,8 +977,9 @@ def build_feedpak(
             extra_stem_paths = []
             for s in existing_pack['stems']:
                 stem_src = Path(s['file'])
-                dest_rel = f"stems/{s['id']}{stem_src.suffix.lower() or '.ogg'}"
-                stem_entry = {'id': s['id'], 'file': dest_rel}
+                stem_id = pack.sanitize_stem_id_component(str(s.get('id', '')))
+                dest_rel = f"stems/{stem_id}{stem_src.suffix.lower() or '.ogg'}"
+                stem_entry = {'id': stem_id, 'file': dest_rel}
                 if s.get('name'):
                     stem_entry['name'] = s['name']
                 extra_stems_manifest.append(stem_entry)

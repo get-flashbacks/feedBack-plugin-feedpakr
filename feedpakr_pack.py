@@ -29,6 +29,12 @@ def sanitize_filename_component(text: str, max_len: int = 60) -> str:
     return cleaned[:max_len] or 'untitled'
 
 
+def sanitize_stem_id_component(text: str, fallback: str = 'stem', max_len: int = 60) -> str:
+    """Return a safe single path component for manifest-derived stem ids."""
+    cleaned = sanitize_filename_component(text, max_len=max_len).replace('.', '_').strip('_')
+    return cleaned or fallback
+
+
 def unique_output_path(out_dir: str | Path, base_name: str, ext: str = '.feedpak') -> Path:
     """Return a non-colliding path under out_dir, appending _2, _3, … as needed."""
     out_dir = Path(out_dir)

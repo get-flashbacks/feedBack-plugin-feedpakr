@@ -452,6 +452,7 @@ def setup(app, context):
             'stems': [s['id'] for s in result['stems']],
             'has_full_mix': bool(result.get('full_mix_path')),
             'has_cover': bool(result.get('cover_path')),
+            'warnings': result.get('warnings', []),
         }
 
     @app.websocket('/ws/plugins/feedpakr/build')

@@ -350,15 +350,18 @@ def extract_pack_assets(pack_path: str | Path, out_dir: str | Path) -> dict:
     full_mix_path: str | None = None
     stems: list[dict] = []
     used_names: set[str] = set()
+    warnings: list[str] = []
     for s in raw_stems:
         if not isinstance(s, dict):
             continue
-        sid = str(s.get('id', ''))
+        raw_sid = str(s.get('id', ''))
+        sid = pack.sanitize_stem_id_component(raw_sid)
         sfile = str(s.get('file', ''))
-        if not sid or not sfile:
+        if not raw_sid or not sfile:
             continue
         data = _read_member(src, sfile)
         if data is None:
+            warnings.append(f"Declared stem '{sid}' could not be read and was skipped.")
             continue
         dest_name = Path(sfile).name
         # Two stems sharing a basename (different source subdirs) would
@@ -377,14 +380,22 @@ def extract_pack_assets(pack_path: str | Path, out_dir: str | Path) -> dict:
             stems.append(entry)
 
     if full_mix_path is None and not stems:
-        return {'error': 'This pack has no stems to reuse.'}
+        return {'error': 'This pack has no stems to reuse.', 'warnings': warnings}
 
     cover_path: str | None = None
     cover_rel = manifest.get('cover')
     if isinstance(cover_rel, str) and cover_rel:
         cdata = _read_member(src, cover_rel)
         if cdata is not None:
-            cdest = out / Path(cover_rel).name
+            cover_name = Path(cover_rel).name
+            if cover_name in used_names:
+                cover_name = f"{pack.sanitize_stem_id_component(Path(cover_name).stem, fallback='cover')}{Path(cover_name).suffix}"
+                n = 2
+                while cover_name in used_names:
+                    cover_name = f"{pack.sanitize_stem_id_component(Path(cover_rel).stem, fallback='cover')}_{n}{Path(cover_rel).suffix}"
+                    n += 1
+            used_names.add(cover_name)
+            cdest = out / cover_name
             cdest.write_bytes(cdata)
             cover_path = str(cdest)
 
@@ -401,6 +412,7 @@ def extract_pack_assets(pack_path: str | Path, out_dir: str | Path) -> dict:
         'full_mix_path': full_mix_path,
         'cover_path': cover_path,
         'sync_reference_path': sync_reference_path,
+        'warnings': warnings,
         'error': None,
     }
 

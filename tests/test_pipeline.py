@@ -275,6 +275,37 @@ def test_build_feedpak_existing_pack_mode_keeps_original_stems_and_cover(tmp_pat
 
 
 @fixture_available
+def test_build_feedpak_existing_pack_sanitizes_stem_ids_for_archive_paths(tmp_path, monkeypatch):
+    unsafe_path = tmp_path / 'unsafe.ogg'
+    unsafe_path.write_bytes(b'OggS-unsafe')
+    existing_pack = {
+        'stems': [{'id': '../lead', 'file': str(unsafe_path)}],
+        'full_mix_path': None,
+        'cover_path': None,
+        'sync_reference_path': str(unsafe_path),
+    }
+    monkeypatch.setattr(pipeline, '_resolve_audio', lambda *a, **k: (None, 0.0))
+
+    result = pipeline.build_feedpak(
+        str(MONEY_GP5),
+        track_indices=[3],
+        arrangement_names={3: 'Bass'},
+        audio_mode='existing_pack',
+        existing_pack=existing_pack,
+        report=lambda stage, pct: None,
+    )
+
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
+        manifest = yaml.safe_load(zf.read('manifest.yaml'))
+        stem_file = manifest['stems'][0]['file']
+        assert stem_file == 'stems/lead.ogg'
+        assert stem_file in zf.namelist()
+        assert not any(name.startswith('../') or '/..' in name for name in zf.namelist())
+
+
+@fixture_available
 def test_build_feedpak_existing_pack_mode_with_full_mix_no_extra_stems(tmp_path, monkeypatch):
     """A source pack whose only stem is 'full' (single unseparated mix)
     reuses that mixdown directly — no extra_stems entries, same shape as

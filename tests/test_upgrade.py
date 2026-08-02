@@ -418,6 +418,21 @@ def test_extract_pack_assets_extracts_cover(tmp_path):
     assert Path(result['cover_path']).read_bytes() == b'\xff\xd8\xff-jpeg-bytes'
 
 
+def test_extract_pack_assets_cover_does_not_overwrite_stem_basename(tmp_path):
+    src = _write_sloppak_with_files(
+        tmp_path,
+        {'title': 'T', 'artist': 'A', 'duration': 10.0,
+         'stems': [{'id': 'full', 'file': 'stems/cover.jpg'}],
+         'cover': 'art/cover.jpg', 'arrangements': []},
+        {'stems/cover.jpg': b'OggS-full', 'art/cover.jpg': b'\xff\xd8\xff-cover'},
+    )
+    result = upgrade.extract_pack_assets(src, tmp_path / 'out')
+    assert result['error'] is None
+    assert Path(result['full_mix_path']).read_bytes() == b'OggS-full'
+    assert Path(result['cover_path']).read_bytes() == b'\xff\xd8\xff-cover'
+    assert Path(result['cover_path']).name != Path(result['full_mix_path']).name
+
+
 def test_extract_pack_assets_no_cover_key_yields_none(tmp_path):
     src = _write_sloppak_with_files(
         tmp_path,
@@ -458,6 +473,49 @@ def test_extract_pack_assets_zip_form(tmp_path):
     result = upgrade.extract_pack_assets(zip_path, tmp_path / 'out')
     assert result['error'] is None
     assert Path(result['full_mix_path']).read_bytes() == b'OggS-zipped-full'
+
+
+def test_extract_pack_assets_sanitizes_stem_ids_before_collision_names(tmp_path):
+    src = _write_sloppak_with_files(
+        tmp_path,
+        {'title': 'T', 'artist': 'A', 'duration': 10.0,
+         'stems': [
+             {'id': 'full', 'file': 'mix/full.ogg'},
+             {'id': 'guitar', 'file': 'a/audio.ogg'},
+             {'id': '../lead', 'file': 'b/audio.ogg'},
+         ], 'arrangements': []},
+        {
+            'mix/full.ogg': b'OggS-full',
+            'a/audio.ogg': b'OggS-guitar',
+            'b/audio.ogg': b'OggS-lead',
+        },
+    )
+    out = tmp_path / 'out'
+    result = upgrade.extract_pack_assets(src, out)
+    assert result['error'] is None
+    assert {s['id'] for s in result['stems']} == {'guitar', 'lead'}
+
+    extracted = [Path(s['file']) for s in result['stems']]
+    assert all(p.parent == out for p in extracted)
+    assert {p.name for p in extracted} == {'audio.ogg', 'lead_audio.ogg'}
+    assert all('..' not in p.parts for p in extracted)
+    assert (out / 'lead_audio.ogg').read_bytes() == b'OggS-lead'
+
+
+def test_extract_pack_assets_warns_when_declared_stem_cannot_be_read(tmp_path):
+    src = _write_sloppak_with_files(
+        tmp_path,
+        {'title': 'T', 'artist': 'A', 'duration': 10.0,
+         'stems': [
+             {'id': 'full', 'file': 'stems/full.ogg'},
+             {'id': 'missing', 'file': 'stems/missing.ogg'},
+         ], 'arrangements': []},
+        {'stems/full.ogg': b'OggS-full'},
+    )
+    result = upgrade.extract_pack_assets(src, tmp_path / 'out')
+    assert result['error'] is None
+    assert result['warnings']
+    assert 'missing' in result['warnings'][0]
 
 
 # ── Real-fixture regression (the actual sample library) ────────────────────
