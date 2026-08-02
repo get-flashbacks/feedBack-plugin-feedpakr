@@ -142,6 +142,19 @@ for them on the GPIF side at all:
 
 ## Tests
 
+### GP-to-feedpak fidelity report
+
+Build a real Guitar Pro file through the production pipeline and report whether
+metadata and playable features survive in the resulting feedpak:
+
+```bash
+py compare_gp_to_feedpak.py "path/to/song.gp" --json
+```
+
+Use `--audio-mode embedded` for GP8 embedded audio or `--audio-mode midi` for a
+synthesized reference stem. The command exits nonzero when an authored field is
+missing or only partially preserved; warnings remain visible separately.
+
 ```bash
 pip install jsonschema
 pytest
