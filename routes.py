@@ -111,8 +111,8 @@ _uploads: dict[str, dict] = {}
 _SUPPORTED_EXTENSIONS = {'.gp3', '.gp4', '.gp5', '.gpx', '.gp'}
 
 _HANDOFF_ROUTES = {
-    'preview': ('GET', '/api/plugins/song_preview/audit'),
-    'split': ('GET', '/api/plugins/stem_splitter/jobs'),
+    'preview': ('POST', '/api/plugins/song_preview/backfill'),
+    'split': ('POST', '/api/plugins/stem_splitter/split'),
 }
 
 
