@@ -105,9 +105,11 @@ put it there, without needing any changes to the feedBack core.
   schemas, always returning a report rather than raising. The validation route accepts
   a DLC-relative `.feedpak` path for checking existing packs without rebuilding them.
 
-Handoffs to `song-preview`/`stem-splitter` live entirely in `screen.js` (`fprProbeHandoffs`
-/ `fprRunHandoff`) — both plugins expose same-origin REST endpoints, so there's nothing
-for the backend to proxy.
+Handoffs to `song-preview`/`stem-splitter` are invoked by `screen.js`
+(`fprProbeHandoffs` / `fprRunHandoff`). The backend exposes
+`GET /api/plugins/feedpakr/handoffs` as a read-only availability probe for those
+sibling routes; feedpakr still leaves the actual preview generation and stem
+splitting work to the dedicated plugins.
 
 `routes.py` loads its siblings via `context['load_sibling']` (not bare imports) to avoid
 the plugin-module-name collisions that mechanism exists to prevent.
