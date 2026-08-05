@@ -76,6 +76,22 @@ def test_handoffs_route_reports_registered_sibling_endpoints(monkeypatch):
     routes = _load_routes(monkeypatch)
     app = _FakeApp()
     app.routes.extend([
+        _Route('/api/plugins/song_preview/backfill', {'POST'}),
+        _Route('/api/plugins/stem_splitter/split', {'POST'}),
+    ])
+
+    routes.setup(app, _context())
+
+    handler = app.handlers[('GET', '/api/plugins/feedpakr/handoffs')]
+    assert asyncio.run(handler()) == {
+        'handoffs': {'preview': True, 'split': True},
+    }
+
+
+def test_handoffs_route_ignores_auxiliary_probe_endpoints(monkeypatch):
+    routes = _load_routes(monkeypatch)
+    app = _FakeApp()
+    app.routes.extend([
         _Route('/api/plugins/song_preview/audit', {'GET'}),
         _Route('/api/plugins/stem_splitter/jobs', {'GET'}),
     ])
@@ -84,7 +100,7 @@ def test_handoffs_route_reports_registered_sibling_endpoints(monkeypatch):
 
     handler = app.handlers[('GET', '/api/plugins/feedpakr/handoffs')]
     assert asyncio.run(handler()) == {
-        'handoffs': {'preview': True, 'split': True},
+        'handoffs': {'preview': False, 'split': False},
     }
 
 
