@@ -140,20 +140,22 @@ def _build_song_timeline(manifest: dict, src: Path) -> dict | None:
 
 
 def _has_phrase_ladder(manifest: dict, src: Path) -> bool:
-    """True when any arrangement JSON already carries phrase-level difficulty."""
-    for arr in manifest.get('arrangements', []) or []:
-        rel = arr.get('file')
-        if not rel:
-            continue
-        raw = _read_member(src, rel)
-        if raw is None:
-            continue
-        try:
-            payload = json.loads(raw)
-        except (ValueError, TypeError):
-            continue
-        if payload.get('phrases'):
-            return True
+    """True when arrangement 0 already carries phrase-level difficulty."""
+    arrangements = manifest.get('arrangements', []) or []
+    if not arrangements:
+        return False
+    rel = arrangements[0].get('file')
+    if not rel:
+        return False
+    raw = _read_member(src, rel)
+    if raw is None:
+        return False
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        return False
+    if payload.get('phrases'):
+        return True
     return False
 
 
