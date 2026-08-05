@@ -1,7 +1,7 @@
 {
   "id": "feedpakr",
   "name": "Feedpakr",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "private": false,
   "description": "Imports Guitar Pro files (GP3-GP8) into .feedpak at maximum fidelity, and upgrades existing .sloppak files to .feedpak.",
   "nav": {
