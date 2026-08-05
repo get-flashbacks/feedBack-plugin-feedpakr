@@ -151,7 +151,7 @@ def _route_registered(app, method: str, path: str) -> bool:
         if getattr(route, 'path', None) != path:
             continue
         methods = getattr(route, 'methods', None)
-        if methods is None or method in methods:
+        if methods is not None and method in methods:
             return True
     return False
 
