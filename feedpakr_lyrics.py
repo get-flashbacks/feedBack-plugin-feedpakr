@@ -78,6 +78,37 @@ def parse_vocal_pitch_xml(xml_path: str) -> dict | None:
     return {'version': 1, 'notes': notes} if notes else None
 
 
+def reconstruct_plain_text(entries: list[dict]) -> str:
+    """Rebuild readable plain-text lyrics from feedpak lyrics.json entries
+    (spec §7.1) — the inverse of the *shape* (not the timing) produced by
+    extract_gp345_lyrics() / parse_vocals_xml(). A trailing "-" on `w`
+    joins directly onto the next entry (no space, mid-word split); a
+    trailing "+" ends the current line. Used to hand a pack's own
+    already-extracted (possibly approximate) lyrics back to a forced
+    aligner as plain text, e.g. the lyrics_sync handoff — never called
+    during a normal build.
+    """
+    lines: list[str] = []
+    current = ''
+    pending_join = False
+    for entry in entries:
+        w = str((entry or {}).get('w', ''))
+        if not w:
+            continue
+        is_join = w.endswith('-')
+        is_line_end = w.endswith('+')
+        if is_join or is_line_end:
+            w = w[:-1]
+        current = current + w if pending_join else (f'{current} {w}' if current else w)
+        pending_join = is_join
+        if is_line_end:
+            lines.append(current)
+            current = ''
+    if current:
+        lines.append(current)
+    return '\n'.join(lines)
+
+
 _SYLLABLE_SPLIT = re.compile(r'\s+')
 
 

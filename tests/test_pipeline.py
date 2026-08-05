@@ -589,3 +589,42 @@ def test_build_feedpak_gp345_keys_json_present_when_extractable():
     # Whatever key the source declares (or its default), the pointer and
     # side file must be consistently present together.
     assert manifest.get('keys') == 'keys.json'
+
+
+@fixture_available
+def test_build_feedpak_gp345_lyrics_are_marked_approximate_when_present():
+    """A GP3-5 source has no per-syllable timing (song.lyrics is one line
+    per measure), so any lyrics this pipeline extracted for it MUST have
+    come from the extract_gp345_lyrics() fallback — there's no other lyrics
+    path for a .gp5 file. features['lyrics_approximate'] gates the
+    lyrics_sync handoff button in screen.js; it must never be True for a
+    GPIF source (exact timing, nothing to re-sync)."""
+    result = pipeline.build_feedpak(
+        str(MONEY_GP5),
+        track_indices=[1],
+        arrangement_names={1: 'Rhythm'},
+        audio_mode='none',
+        report=lambda stage, pct: None,
+    )
+    features = result['features']
+    assert 'lyrics_approximate' in features
+    if features['lyrics']:
+        assert features['lyrics_approximate'] is True
+    else:
+        assert features['lyrics_approximate'] is False
+
+
+@gp8_fixture_available
+def test_build_feedpak_gpif_lyrics_are_never_marked_approximate():
+    """GPIF sources get exact per-syllable timing from the <vocals> XML —
+    features['lyrics_approximate'] must stay False even when lyrics are
+    present, so the lyrics_sync handoff button never offers to 're-sync'
+    a chart that already has real timing."""
+    result = pipeline.build_feedpak(
+        str(MONEY_GP8),
+        track_indices=[1],
+        arrangement_names={1: 'Rhythm'},
+        audio_mode='none',
+        report=lambda stage, pct: None,
+    )
+    assert result['features']['lyrics_approximate'] is False
