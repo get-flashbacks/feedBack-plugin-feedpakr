@@ -1069,8 +1069,8 @@ def build_feedpak(
                 'tones': any(
                     arr.get('tones') for arr in arrangement_files.values()
                 ),
-                'phrase_ladder': any(
-                    arr.get('phrases') for arr in arrangement_files.values()
+                'phrase_ladder': bool(
+                    next(iter(arrangement_files.values()), {}).get('phrases')
                 ),
                 'real_audio': bool(
                     (audio_path and audio_mode in {'embedded', 'sync', 'existing_pack'})
