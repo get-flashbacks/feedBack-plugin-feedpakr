@@ -139,6 +139,24 @@ def _build_song_timeline(manifest: dict, src: Path) -> dict | None:
     return None
 
 
+def _has_phrase_ladder(manifest: dict, src: Path) -> bool:
+    """True when any arrangement JSON already carries phrase-level difficulty."""
+    for arr in manifest.get('arrangements', []) or []:
+        rel = arr.get('file')
+        if not rel:
+            continue
+        raw = _read_member(src, rel)
+        if raw is None:
+            continue
+        try:
+            payload = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        if payload.get('phrases'):
+            return True
+    return False
+
+
 _VALID_LYRICS_SOURCES = {'authored', 'transcribed', 'user'}
 
 # Known non-spec values written by this ecosystem's own now-superseded
@@ -284,6 +302,7 @@ def upgrade_sloppak(sloppak_path: str) -> dict:
             zf.writestr(rel, raw)
             written_members.add(rel)
 
+    phrase_ladder = _has_phrase_ladder(new_manifest, src)
     real_audio = any(
         has_recorded_audio_provenance
         and str(stem.get('id')) == 'full'
@@ -299,7 +318,7 @@ def upgrade_sloppak(sloppak_path: str) -> dict:
         'validation': validation,
         'title': new_manifest.get('title', ''),
         'artist': new_manifest.get('artist', ''),
-        'features': {'real_audio': real_audio},
+        'features': {'real_audio': real_audio, 'phrase_ladder': phrase_ladder},
     }
 
 
