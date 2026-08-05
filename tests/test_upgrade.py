@@ -49,6 +49,34 @@ def test_stamps_feedpak_version(tmp_path):
     assert manifest['feedpak_version'] == upgrade.FEEDPAK_VERSION
 
 
+def test_features_report_existing_phrase_ladder(tmp_path):
+    src = _write_sloppak(
+        tmp_path,
+        {
+            'title': 'T',
+            'artist': 'A',
+            'duration': 10.0,
+            'stems': [{'id': 'full', 'file': 'stems/full.ogg'}],
+            'arrangements': [{'file': 'arrangements/lead.json', 'name': 'Lead'}],
+        },
+        {
+            'lead.json': {
+                'notes': [],
+                'phrases': [{
+                    'start_time': 0.0,
+                    'end_time': 2.0,
+                    'max_difficulty': 1,
+                    'levels': [],
+                }],
+            },
+        },
+    )
+
+    result = upgrade.upgrade_sloppak(str(src))
+
+    assert result['features']['phrase_ladder'] is True
+
+
 def test_original_file_never_modified(tmp_path):
     src = _write_sloppak(tmp_path, {'title': 'T', 'artist': 'A', 'duration': 10.0,
                                      'stems': [{'id': 'full', 'file': 'x.ogg'}], 'arrangements': []})
