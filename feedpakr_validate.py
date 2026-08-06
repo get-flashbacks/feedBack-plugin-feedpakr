@@ -123,6 +123,34 @@ def validate_pack(
     return report
 
 
+# A .feedpak dropped into the DLC folder (e.g. downloaded from somewhere
+# and validated via /api/plugins/feedpakr/validate) is untrusted content —
+# a crafted member can declare a tiny compressed size but inflate to
+# gigabytes ("zip bomb"). zipfile's own .read() decompresses the whole
+# stream into memory before returning, with no size limit of its own.
+# Read in bounded chunks and abort early instead of buffering an unbounded
+# amount of attacker-controlled data.
+_MAX_VALIDATE_MEMBER_BYTES = 256 * 1024 * 1024  # 256 MB — generous for one sidecar file
+
+
+def _read_zip_member_capped(zf: zipfile.ZipFile, rel: str) -> bytes:
+    """Like zf.read(rel), but raises if decompressed output exceeds
+    _MAX_VALIDATE_MEMBER_BYTES instead of buffering it all in memory."""
+    info = zf.getinfo(rel)  # raises KeyError if missing, same as zf.read()
+    chunks: list[bytes] = []
+    total = 0
+    with zf.open(info) as fh:
+        while True:
+            chunk = fh.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > _MAX_VALIDATE_MEMBER_BYTES:
+                raise ValueError(f'{rel!r} exceeds the {_MAX_VALIDATE_MEMBER_BYTES} byte member size limit')
+            chunks.append(chunk)
+    return b''.join(chunks)
+
+
 def validate_feedpak_file(path: str | Path) -> dict[str, list[str]]:
     """Validate the manifest and referenced JSON sidecars in a feedpak ZIP."""
     source = Path(path)
@@ -135,7 +163,7 @@ def validate_feedpak_file(path: str | Path) -> dict[str, list[str]]:
         if manifest_name is None:
             return {'manifest.yaml': ['<root>: manifest file is missing']}
         try:
-            manifest = yaml.safe_load(zf.read(manifest_name).decode('utf-8'))
+            manifest = yaml.safe_load(_read_zip_member_capped(zf, manifest_name).decode('utf-8'))
         except Exception as exc:
             return {manifest_name: [f'<root>: could not parse YAML: {exc}']}
         if not isinstance(manifest, dict):
@@ -145,7 +173,7 @@ def validate_feedpak_file(path: str | Path) -> dict[str, list[str]]:
             if not rel:
                 return None
             try:
-                payload = json.loads(zf.read(rel))
+                payload = json.loads(_read_zip_member_capped(zf, rel))
             except KeyError:
                 report.setdefault(rel, []).append('<root>: referenced file is missing')
                 return None
