@@ -38,22 +38,33 @@ FEEDPAK_VERSION = pack.FEEDPAK_VERSION
 def _load_manifest_fallback(src: Path) -> dict:
     """Minimal manifest read for environments without the host's sloppak
     module (e.g. a bare test run) — mirrors sloppak.py's own _read_manifest
-    / _read_manifest_from_zip closely enough for this purpose."""
+    / _read_manifest_from_zip closely enough for this purpose.
+
+    Both branches are bounded by _MAX_MEMBER_BYTES: `src` is untrusted
+    (attacker-supplied) content, and manifest.yaml is the very first thing
+    read off it, before any other size check in the upload path has run.
+    """
     if src.is_dir():
         for name in ('manifest.yaml', 'manifest.yml'):
             mf = src / name
-            if mf.exists():
-                data = yaml.safe_load(mf.read_text(encoding='utf-8'))
-                return data if isinstance(data, dict) else {}
+            if not mf.exists():
+                continue
+            try:
+                if mf.stat().st_size > _MAX_MEMBER_BYTES:
+                    continue
+            except OSError:
+                continue
+            data = yaml.safe_load(mf.read_text(encoding='utf-8'))
+            return data if isinstance(data, dict) else {}
         raise FileNotFoundError(f'manifest.yaml not found in {src}')
     with zipfile.ZipFile(src) as zf:
         for name in ('manifest.yaml', 'manifest.yml'):
-            try:
-                data = yaml.safe_load(zf.read(name).decode('utf-8'))
-                if isinstance(data, dict):
-                    return data
-            except KeyError:
+            raw = _read_zip_member_capped(zf, name)
+            if raw is None:
                 continue
+            data = yaml.safe_load(raw.decode('utf-8'))
+            if isinstance(data, dict):
+                return data
     raise FileNotFoundError(f'manifest.yaml not found in {src}')
 
 

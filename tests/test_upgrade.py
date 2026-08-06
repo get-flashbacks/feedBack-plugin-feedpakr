@@ -514,6 +514,45 @@ def test_extract_pack_assets_caps_decompressed_member_size(tmp_path, monkeypatch
         assert any('full' in w.lower() for w in result['warnings'])
 
 
+def test_load_manifest_fallback_caps_decompressed_zip_manifest(tmp_path, monkeypatch):
+    """manifest.yaml itself is the first thing read off an untrusted upload,
+    before any other size check runs — a small, highly-compressible
+    manifest.yaml entry must not be fully buffered in memory past the
+    per-member cap (a zip-bomb manifest, not just a zip-bomb stem)."""
+    monkeypatch.setattr(upgrade, '_MAX_MEMBER_BYTES', 1024)
+    zip_path = tmp_path / 'song.sloppak'
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        # Highly compressible payload: tiny on disk, well over the cap once
+        # decompressed — stands in for a real zip-bomb manifest entry.
+        zf.writestr('manifest.yaml', b'a: ' + b'x' * (1024 * 1024))
+
+    with pytest.raises(FileNotFoundError):
+        upgrade._load_manifest_fallback(zip_path)
+
+
+def test_load_manifest_fallback_caps_oversized_dir_manifest(tmp_path, monkeypatch):
+    """Directory-form counterpart of the above: an oversized manifest.yaml
+    file on disk must also be declined rather than read in full."""
+    monkeypatch.setattr(upgrade, '_MAX_MEMBER_BYTES', 1024)
+    src = tmp_path / 'song.sloppak'
+    src.mkdir()
+    (src / 'manifest.yaml').write_bytes(b'a: ' + b'x' * (2 * 1024))
+
+    with pytest.raises(FileNotFoundError):
+        upgrade._load_manifest_fallback(src)
+
+
+def test_load_manifest_fallback_zip_form_still_works_under_cap(tmp_path):
+    """Sanity check: a normal small manifest.yaml is unaffected by the cap."""
+    zip_path = tmp_path / 'song.sloppak'
+    manifest = {'title': 'T', 'artist': 'A', 'duration': 10.0,
+                'stems': [{'id': 'full', 'file': 'stems/full.ogg'}], 'arrangements': []}
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('manifest.yaml', yaml.safe_dump(manifest, sort_keys=False))
+
+    assert upgrade._load_manifest_fallback(zip_path) == manifest
+
+
 def test_extract_pack_assets_zip_form(tmp_path):
     """Works against a zip-form .feedpak, not just a dir-form .sloppak."""
     zip_path = tmp_path / 'song.feedpak'
