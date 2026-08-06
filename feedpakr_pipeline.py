@@ -104,6 +104,16 @@ def _check_extension(gp_path: str) -> None:
         )
 
 
+def _manifest_arrangement_zero_has_phrases(manifest: dict, arrangement_files: dict[str, dict]) -> bool:
+    arrangements = manifest.get('arrangements') or []
+    if not arrangements:
+        return False
+    rel = arrangements[0].get('file')
+    if not rel:
+        return False
+    return bool((arrangement_files.get(rel) or {}).get('phrases'))
+
+
 # ── Parsing / track listing ─────────────────────────────────────────────────
 
 def parse_gp(gp_path: str) -> dict:
@@ -1069,8 +1079,9 @@ def build_feedpak(
                 'tones': any(
                     arr.get('tones') for arr in arrangement_files.values()
                 ),
-                'phrase_ladder': bool(
-                    next(iter(arrangement_files.values()), {}).get('phrases')
+                'phrase_ladder': _manifest_arrangement_zero_has_phrases(
+                    manifest,
+                    arrangement_files,
                 ),
                 'real_audio': bool(
                     (audio_path and audio_mode in {'embedded', 'sync', 'existing_pack'})
