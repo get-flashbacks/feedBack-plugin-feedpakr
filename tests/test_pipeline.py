@@ -48,6 +48,28 @@ def test_check_extension_accepts_gp345():
         pipeline._check_extension(ext)  # must not raise
 
 
+def test_arrangement_zero_phrase_check_uses_manifest_index():
+    manifest = {
+        'arrangements': [
+            {'id': 'drums', 'type': 'drums', 'drum_tab': 'drum_tab_drums.json'},
+            {'id': 'lead', 'file': 'lead.json'},
+        ],
+    }
+    arrangement_files = {
+        'lead.json': {
+            'notes': [],
+            'phrases': [{
+                'start_time': 0.0,
+                'end_time': 2.0,
+                'max_difficulty': 1,
+                'levels': [],
+            }],
+        },
+    }
+
+    assert pipeline._manifest_arrangement_zero_has_phrases(manifest, arrangement_files) is False
+
+
 def test_capo_for_track_reads_offset():
     song = pipeline.guitarpro.Song()
     song.tracks[0].offset = 3
