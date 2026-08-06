@@ -57,17 +57,76 @@ def _load_manifest_fallback(src: Path) -> dict:
     raise FileNotFoundError(f'manifest.yaml not found in {src}')
 
 
-def _list_members(src: Path) -> list[str]:
+def _is_safe_archive_member(name: str) -> bool:
+    """True if `name` is safe to use as a member path inside a zip we are
+    building (or as a relative-to-src filesystem path we'll open).
+
+    Source `.sloppak`/`.feedpak` files are untrusted content — nothing
+    stops a crafted archive from declaring a member named e.g.
+    ``../../../etc/cron.d/evil`` or an absolute path. `_list_members` /
+    `zipfile.namelist()` return such names verbatim; copying them straight
+    into a newly-built zip (`zf.writestr(rel, raw)`) would silently forward
+    the poisoned path into the produced .feedpak, where it becomes a
+    zip-slip payload for whatever later extracts that file (a naive
+    `extractall()`, a different tool, a future host version). Reject
+    anything that isn't a plain, relative, forward-slash path.
+    """
+    if not name or name.startswith('/') or name.startswith('\\'):
+        return False
+    # Reject drive-letter / UNC-style absolute paths on Windows hosts too.
+    if len(name) >= 2 and name[1] == ':':
+        return False
+    posix = name.replace('\\', '/')
+    parts = posix.split('/')
+    if any(part in ('', '..') for part in parts):
+        return False
+    return True
+
+
+def _list_members(src: Path) -> tuple[list[str], int]:
+    """Return (safe_member_names, unsafe_skipped_count)."""
     if src.is_dir():
-        return [
-            p.relative_to(src).as_posix()
-            for p in src.rglob('*') if p.is_file()
-        ]
+        # Real filesystem walks under src can't produce a '..'-escaping
+        # relative path, so every entry here is trivially safe.
+        names = [p.relative_to(src).as_posix() for p in src.rglob('*') if p.is_file()]
+        return names, 0
     with zipfile.ZipFile(src) as zf:
-        return [n for n in zf.namelist() if not n.endswith('/')]
+        raw = [n for n in zf.namelist() if not n.endswith('/')]
+    safe = [n for n in raw if _is_safe_archive_member(n)]
+    return safe, len(raw) - len(safe)
+
+
+# A single zip member is untrusted, attacker-controlled content — nothing
+# bounds how much it inflates to on decompression ("zip bomb"). zipfile's
+# own .read() buffers the entire decompressed stream in memory before
+# returning, so a small crafted upload can exhaust host memory well before
+# any size check on the *compressed* upload (routes.py's _MAX_*_BYTES) ever
+# has a chance to reject it. Read in bounded chunks and abort early instead.
+_MAX_MEMBER_BYTES = 256 * 1024 * 1024  # 256 MB — generous for one stem/cover/arrangement file
+
+
+def _read_zip_member_capped(zf: zipfile.ZipFile, rel: str) -> bytes | None:
+    try:
+        info = zf.getinfo(rel)
+    except KeyError:
+        return None
+    chunks: list[bytes] = []
+    total = 0
+    with zf.open(info) as fh:
+        while True:
+            chunk = fh.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > _MAX_MEMBER_BYTES:
+                return None
+            chunks.append(chunk)
+    return b''.join(chunks)
 
 
 def _read_member(src: Path, rel: str) -> bytes | None:
+    if not _is_safe_archive_member(rel):
+        return None
     if sloppak_mod is not None:
         return sloppak_mod.read_member_bytes(src, rel)
     if src.is_dir():
@@ -76,12 +135,16 @@ def _read_member(src: Path, rel: str) -> bytes | None:
             target.relative_to(src.resolve())
         except ValueError:
             return None
-        return target.read_bytes() if target.is_file() else None
-    with zipfile.ZipFile(src) as zf:
-        try:
-            return zf.read(rel)
-        except KeyError:
+        if not target.is_file():
             return None
+        try:
+            if target.stat().st_size > _MAX_MEMBER_BYTES:
+                return None
+        except OSError:
+            return None
+        return target.read_bytes()
+    with zipfile.ZipFile(src) as zf:
+        return _read_zip_member_capped(zf, rel)
 
 
 def _section_time(entry: dict) -> float | None:
@@ -245,7 +308,12 @@ def upgrade_sloppak(sloppak_path: str) -> dict:
     _promote_full_stem(new_manifest, src, warnings)
     _normalize_lyrics_source(new_manifest, warnings)
 
-    members = _list_members(src)
+    members, unsafe_count = _list_members(src)
+    if unsafe_count:
+        warnings.append(
+            f'{unsafe_count} file(s) in the source pack had unsafe/escaping archive '
+            'paths and were omitted from the upgrade.'
+        )
     manifest_filenames = {'manifest.yaml', 'manifest.yml'}
     copy_members = [m for m in members if Path(m).name not in manifest_filenames]
 

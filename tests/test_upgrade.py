@@ -86,6 +86,31 @@ def test_copies_all_files_verbatim(tmp_path):
     assert result['features']['real_audio'] is True
 
 
+def test_upgrade_sloppak_rejects_path_traversal_members_in_zip_source(tmp_path):
+    """A zip-form .sloppak with a member named to escape the archive
+    (../.. or an absolute path) must not have that name copied verbatim
+    into the newly-built .feedpak — that would forward a zip-slip payload
+    to whatever later extracts the output file."""
+    zip_path = tmp_path / 'song.sloppak'
+    manifest = {
+        'title': 'T', 'artist': 'A', 'duration': 10.0,
+        'stems': [{'id': 'full', 'file': 'stems/full.ogg'}], 'arrangements': [],
+    }
+    with zipfile.ZipFile(zip_path, 'w') as zf:
+        zf.writestr('manifest.yaml', yaml.safe_dump(manifest, sort_keys=False))
+        zf.writestr('stems/full.ogg', b'OggS-full')
+        zf.writestr('../../../../tmp/evil.txt', b'pwned')
+        zf.writestr('/etc/evil.txt', b'pwned')
+
+    result = upgrade.upgrade_sloppak(str(zip_path))
+    with _unzip(result['bytes']) as zf:
+        names = zf.namelist()
+    assert not any(n.startswith('/') for n in names)
+    assert not any('..' in Path(n).parts for n in names)
+    assert 'stems/full.ogg' in names
+    assert any('unsafe' in w.lower() for w in result['warnings'])
+
+
 def test_midi_rendered_single_stem_disables_real_audio_feature(tmp_path):
     src = _write_sloppak(tmp_path, {
         'title': 'T', 'artist': 'A', 'duration': 10.0,
@@ -459,6 +484,34 @@ def test_extract_pack_assets_missing_manifest_errors(tmp_path):
     missing = tmp_path / 'does-not-exist.feedpak'
     result = upgrade.extract_pack_assets(missing, tmp_path / 'out')
     assert result['error'] is not None
+
+
+def test_extract_pack_assets_caps_decompressed_member_size(tmp_path, monkeypatch):
+    """A declared stem whose decompressed content exceeds the per-member
+    cap must be skipped (as if unreadable), not fully buffered in memory —
+    guards against a zip-bomb entry disguised as a small upload.
+
+    Forces the module's own zip-fallback code path (sloppak_mod=None) —
+    when the host's real sloppak module is importable (e.g. a full host
+    checkout sits on sys.path, as some dev/test environments have), it
+    would otherwise service the read itself via read_member_bytes(),
+    which isn't code this test is exercising."""
+    monkeypatch.setattr(upgrade, 'sloppak_mod', None)
+    monkeypatch.setattr(upgrade, '_MAX_MEMBER_BYTES', 1024)
+    zip_path = tmp_path / 'song.feedpak'
+    manifest = {'title': 'T', 'artist': 'A', 'duration': 10.0,
+                'stems': [{'id': 'full', 'file': 'stems/full.ogg'}], 'arrangements': []}
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('manifest.yaml', yaml.safe_dump(manifest, sort_keys=False))
+        # Highly compressible payload: tiny on disk, well over the cap once
+        # decompressed — stands in for a real zip-bomb entry.
+        zf.writestr('stems/full.ogg', b'\x00' * 1024 * 1024)
+
+    result = upgrade.extract_pack_assets(zip_path, tmp_path / 'out')
+    assert result['error'] is not None or result.get('warnings')
+    if result['error'] is None:
+        assert result['full_mix_path'] is None
+        assert any('full' in w.lower() for w in result['warnings'])
 
 
 def test_extract_pack_assets_zip_form(tmp_path):
