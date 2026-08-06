@@ -62,14 +62,16 @@ a fully spec-valid `.feedpak`**. Per file, the upgrade:
 - Preserves every other file and every other manifest key byte-for-byte (spec §9) —
   an upgrade pass only adds data, never removes or reinterprets what's already there.
 
-### Handoffs to song-preview / stem-splitter
+### Handoffs to song-preview / stem-splitter / difficulty-ladder
 
-After a successful import or upgrade, the result panel offers **Generate Preview** and
-**Split Stems** buttons when those plugins are installed (probed via their own REST
-endpoints — feedpakr never generates a preview or splits stems itself, it only calls
-the dedicated plugins that own those features). Buttons for a plugin that isn't
-installed simply don't appear. Split Stems is only offered for embedded or synced
-recordings, not synthesized or audio-free builds.
+After a successful import or upgrade, the result panel offers **Generate Preview**,
+**Split Stems**, and **Generate Difficulty Ladder** buttons when those plugins are
+installed (probed via their own REST endpoints — feedpakr never generates a preview,
+splits stems, or authors difficulty ladders itself, it only calls the dedicated
+plugins that own those features). Buttons for a plugin that isn't installed simply
+don't appear. Split Stems is only offered for embedded or synced recordings, not
+synthesized or audio-free builds. Generate Difficulty Ladder is only offered when
+the new pack does not already report phrase-level difficulty data.
 
 ## Why
 
@@ -105,9 +107,11 @@ put it there, without needing any changes to the feedBack core.
   schemas, always returning a report rather than raising. The validation route accepts
   a DLC-relative `.feedpak` path for checking existing packs without rebuilding them.
 
-Handoffs to `song-preview`/`stem-splitter` live entirely in `screen.js` (`fprProbeHandoffs`
-/ `fprRunHandoff`) — both plugins expose same-origin REST endpoints, so there's nothing
-for the backend to proxy.
+Handoffs to `song-preview`/`stem-splitter`/`difficulty_ladder` are invoked by
+`screen.js` (`fprProbeHandoffs` / `fprRunHandoff`). The backend exposes
+`GET /api/plugins/feedpakr/handoffs` as a read-only availability probe for server
+sibling routes; feedpakr still leaves the actual preview generation, stem
+splitting, and difficulty-ladder generation work to the dedicated plugins.
 
 `routes.py` loads its siblings via `context['load_sibling']` (not bare imports) to avoid
 the plugin-module-name collisions that mechanism exists to prevent.

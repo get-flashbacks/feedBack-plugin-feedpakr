@@ -21,7 +21,7 @@ let _audioAttached = false;
 let _existingPackAttached = false;
 let _sloppaks = [];
 let _upgradeDone = false;
-let _handoffAvailability = { preview: null, split: null };
+let _handoffAvailability = { preview: null, split: null, difficulty: null };
 
 function esc(s) {
     return String(s)
@@ -508,10 +508,10 @@ async function fprBuild() {
     };
 }
 
-// ── Handoffs to song-preview / stem-splitter (when installed) ──────────────
-// Both plugins expose their own same-origin REST endpoints — this only
-// probes for their presence and calls them; feedpakr never generates a
-// preview or splits stems itself.
+// ── Handoffs to sibling plugins (when installed) ───────────────────────────
+// Sibling plugins expose same-origin REST endpoints — feedpakr only probes
+// for their presence and calls them; it never generates previews, splits
+// stems, or authors difficulty ladders itself.
 
 async function fprProbeHandoffs() {
     if (_handoffAvailability.preview === null) {
@@ -526,9 +526,15 @@ async function fprProbeHandoffs() {
             _handoffAvailability.split = r.ok;
         } catch (err) { _handoffAvailability.split = false; }
     }
+    if (_handoffAvailability.difficulty === null) {
+        try {
+            const r = await fetch('/api/plugins/difficulty_ladder/generate', { method: 'OPTIONS' });
+            _handoffAvailability.difficulty = r.status !== 404;
+        } catch (err) { _handoffAvailability.difficulty = false; }
+    }
 }
 
-function fprHandoffButtonsHtml(relPath, allowSplit = true) {
+function fprHandoffButtonsHtml(relPath, allowSplit = true, allowDifficulty = true) {
     if (!relPath) return '';
     return `<div class="flex items-center gap-2 mt-2" data-handoff-for="${esc(relPath)}">
         <button data-handoff="preview" data-handoff-path="${esc(relPath)}"
@@ -538,6 +544,10 @@ function fprHandoffButtonsHtml(relPath, allowSplit = true) {
         <button data-handoff="split" data-handoff-path="${esc(relPath)}" data-split-allowed="${allowSplit ? '1' : '0'}"
             class="hidden px-3 py-1 rounded-lg text-xs text-gray-300 bg-dark-600 hover:bg-dark-500 transition">
             Split Stems
+        </button>
+        <button data-handoff="difficulty" data-handoff-path="${esc(relPath)}" data-difficulty-allowed="${allowDifficulty ? '1' : '0'}"
+            class="hidden px-3 py-1 rounded-lg text-xs text-gray-300 bg-dark-600 hover:bg-dark-500 transition">
+            Generate Difficulty Ladder
         </button>
         <span data-handoff-status class="text-xs text-gray-500"></span>
     </div>`;
@@ -555,32 +565,59 @@ async function fprWireHandoffButtons(container) {
         btn.classList.remove('hidden');
         btn.addEventListener('click', () => fprRunHandoff(btn, 'split'));
     });
+    container.querySelectorAll('[data-handoff="difficulty"]').forEach((btn) => {
+        if (!_handoffAvailability.difficulty || btn.getAttribute('data-difficulty-allowed') !== '1') return;
+        btn.classList.remove('hidden');
+        btn.addEventListener('click', () => fprRunHandoff(btn, 'difficulty'));
+    });
+}
+
+function fprHandoffStatus(kind, phase, data) {
+    if (kind === 'preview') return phase === 'start' ? 'Generating preview…' : 'Preview generated.';
+    if (kind === 'split') return phase === 'start' ? 'Requesting stem split…' : `Stem split queued (${(data && data.enqueued) || 1} job).`;
+    if (kind === 'difficulty') {
+        if (phase === 'start') return 'Generating difficulty ladder…';
+        if (data && data.skipped === 'already-has-phrases') return 'Difficulty ladder already exists.';
+        return `Difficulty ladder generated${data && data.phrases ? ` (${data.phrases} phrase(s))` : ''}.`;
+    }
+    return phase === 'start' ? 'Working…' : 'Done.';
+}
+
+function fprHandoffRequest(kind, relPath) {
+    if (kind === 'preview') {
+        return fetch(`/api/plugins/song_preview/backfill?file=${encodeURIComponent(relPath)}`, { method: 'POST' });
+    }
+    if (kind === 'split') {
+        return fetch('/api/plugins/stem_splitter/split', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: relPath }),
+        });
+    }
+    if (kind === 'difficulty') {
+        return fetch('/api/plugins/difficulty_ladder/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: relPath, arrangement_index: 0, force: false }),
+        });
+    }
+    throw new Error(`Unknown handoff: ${kind}`);
 }
 
 async function fprRunHandoff(btn, kind) {
     const relPath = btn.getAttribute('data-handoff-path');
     const statusEl = btn.parentElement.querySelector('[data-handoff-status]');
     btn.disabled = true;
-    if (statusEl) statusEl.textContent = kind === 'preview' ? 'Generating preview…' : 'Requesting stem split…';
+    if (statusEl) statusEl.textContent = fprHandoffStatus(kind, 'start');
 
     try {
-        const resp = kind === 'preview'
-            ? await fetch(`/api/plugins/song_preview/backfill?file=${encodeURIComponent(relPath)}`, { method: 'POST' })
-            : await fetch('/api/plugins/stem_splitter/split', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename: relPath }),
-            });
+        const resp = await fprHandoffRequest(kind, relPath);
         const data = await resp.json();
         if (data.error || data.ok === false) {
             if (statusEl) statusEl.textContent = data.error || "Needs setup — check the plugin's Settings page.";
             btn.disabled = false;
         } else {
-            if (statusEl) {
-                statusEl.textContent = kind === 'preview'
-                    ? 'Preview generated.'
-                    : `Stem split queued (${data.enqueued || 1} job).`;
-            }
+            if (statusEl) statusEl.textContent = fprHandoffStatus(kind, 'done', data);
             btn.classList.add('hidden');
         }
     } catch (err) {
@@ -635,7 +672,7 @@ function fprShowResult(msg) {
             <p class="mt-2">${validityBadge}</p>
             ${featuresHtml}
             ${warningsHtml}
-            ${fprHandoffButtonsHtml(msg.filename_rel, !!f.real_audio && !f.already_separated)}
+            ${fprHandoffButtonsHtml(msg.filename_rel, !!f.real_audio && !f.already_separated, !f.phrase_ladder)}
             <button onclick="fprReset()"
                 class="mt-4 px-4 py-2 bg-dark-600 hover:bg-dark-500 rounded-xl text-sm text-gray-300 transition">
                 Import Another
@@ -837,7 +874,7 @@ function fprShowUpgradeResults(results) {
         return `<div class="py-2 border-b border-gray-800 last:border-0">
             <p class="text-sm text-gray-300">${esc(r.output)} ${badge}</p>
             ${warns}
-            ${fprHandoffButtonsHtml(r.output_rel, !!r.features?.real_audio)}
+            ${fprHandoffButtonsHtml(r.output_rel, !!r.features?.real_audio, !r.features?.phrase_ladder)}
         </div>`;
     }).join('');
 

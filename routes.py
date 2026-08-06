@@ -38,6 +38,10 @@ for the pattern this is deliberately consistent with):
     offset + sync points, without building anything — lets the UI show
     what alignment was found before committing to a build.
 
+  GET  /api/plugins/feedpakr/handoffs
+    Reports whether the sibling song-preview / stem-splitter handoff
+    endpoints are currently registered on the host app.
+
   POST /api/plugins/feedpakr/upload-existing-pack
     Attaches an existing .sloppak/.feedpak's audio to an upload token, for
     the 'existing_pack' audio mode — re-imports the GP chart while keeping
@@ -58,9 +62,9 @@ for the pattern this is deliberately consistent with):
     per-file progress. Originals are never modified or deleted.
 
 Post-import handoffs to the song-preview / stem-splitter plugins (when
-installed) are done entirely client-side in screen.js — both plugins
-expose their own same-origin REST endpoints, so there is nothing for
-this module to proxy.
+installed) are invoked client-side in screen.js. The backend also exposes
+a read-only availability endpoint so callers can ask the host which sibling
+handoff routes are currently registered.
 """
 
 from __future__ import annotations
@@ -106,6 +110,11 @@ _uploads: dict[str, dict] = {}
 
 _SUPPORTED_EXTENSIONS = {'.gp3', '.gp4', '.gp5', '.gpx', '.gp'}
 
+_HANDOFF_ROUTES = {
+    'preview': ('POST', '/api/plugins/song_preview/backfill'),
+    'split': ('POST', '/api/plugins/stem_splitter/split'),
+}
+
 
 def _purge_stale_uploads() -> None:
     now = time.monotonic()
@@ -136,6 +145,17 @@ def _decode_upload(data: dict, *, max_bytes: int, allowed_exts: set[str] | None 
         return {'error': 'Invalid base64 data'}
 
 
+def _route_registered(app, method: str, path: str) -> bool:
+    method = method.upper()
+    for route in getattr(app, 'routes', []) or []:
+        if getattr(route, 'path', None) != path:
+            continue
+        methods = getattr(route, 'methods', None)
+        if methods is not None and method in methods:
+            return True
+    return False
+
+
 def setup(app, context):
     global _get_dlc_dir, _extract_meta, _meta_db, _log, _pipeline, _pack, _audio, _upgrade, _validate
     _get_dlc_dir = context['get_dlc_dir']
@@ -148,6 +168,16 @@ def setup(app, context):
     _audio = context['load_sibling']('feedpakr_audio')
     _upgrade = context['load_sibling']('feedpakr_upgrade')
     _validate = context['load_sibling']('feedpakr_validate')
+
+    @app.get('/api/plugins/feedpakr/handoffs')
+    async def handoffs():
+        """Report which sibling plugin handoff endpoints are registered."""
+        return {
+            'handoffs': {
+                key: _route_registered(app, method, path)
+                for key, (method, path) in _HANDOFF_ROUTES.items()
+            }
+        }
 
     @app.post('/api/plugins/feedpakr/upload')
     async def upload_gp(data: dict):
