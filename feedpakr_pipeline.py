@@ -111,7 +111,7 @@ def _manifest_arrangement_zero_has_phrases(manifest: dict, arrangement_files: di
     rel = arrangements[0].get('file')
     if not rel:
         return False
-    return bool((arrangement_files.get(rel) or {}).get('phrases'))
+    return bool((arrangement_files.get(Path(rel).name) or {}).get('phrases'))
 
 
 # ── Parsing / track listing ─────────────────────────────────────────────────
