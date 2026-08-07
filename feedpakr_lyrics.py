@@ -22,7 +22,7 @@ last syllable of a line.
 from __future__ import annotations
 
 import re
-from xml.etree import ElementTree as ET
+from defusedxml.ElementTree import parse
 
 
 def is_vocals_xml(xml_path: str) -> bool:
@@ -38,7 +38,7 @@ def is_vocals_xml(xml_path: str) -> bool:
 
 def parse_vocals_xml(xml_path: str) -> list[dict]:
     """Parse a gp2rs_gpx `<vocals>` arrangement XML into lyrics.json entries."""
-    tree = ET.parse(xml_path)
+    tree = parse(xml_path)
     root = tree.getroot()
     entries = []
     for v in root.findall('vocal'):
@@ -60,7 +60,7 @@ def parse_vocal_pitch_xml(xml_path: str) -> dict | None:
     call into gp2rs_gpx's private per-syllable pitch sidecar function.
     `note="0"` marks a lyric-only rest (no real pitch, see convert_file's
     docstring) and is excluded, not zero-mapped."""
-    tree = ET.parse(xml_path)
+    tree = parse(xml_path)
     root = tree.getroot()
     notes = []
     for v in root.findall('vocal'):

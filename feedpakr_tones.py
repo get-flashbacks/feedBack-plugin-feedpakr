@@ -22,7 +22,7 @@ data to populate them with).
 
 from __future__ import annotations
 
-from xml.etree import ElementTree as ET
+from defusedxml.ElementTree import parse, ParseError
 
 try:
     import gp2rs
@@ -55,8 +55,8 @@ def parse_tones_xml(xml_path: str) -> dict | None:
     """Read a `<tonebase>`/`<tones>` block back out of a converted RS XML
     (gp2rs_gpx writes these for GPIF sources; gp2rs never does for GP3-5)."""
     try:
-        tree = ET.parse(xml_path)
-    except ET.ParseError:
+        tree = parse(xml_path)
+    except ParseError:
         return None
     root = tree.getroot()
 
