@@ -1,3 +1,11 @@
 # pyguitarpro, PyYAML, and yt-dlp already ship with the feedBack host
 # (see feedBack/requirements.txt) and are not re-declared here.
 jsonschema>=4.20,<5
+
+# Hardened XML parsing for untrusted GP-derived arrangement XML
+# (feedpakr_safe_xml.py, used by feedpakr_lyrics.py / feedpakr_tones.py) —
+# guards xml.etree.ElementTree.parse against XXE / entity-expansion DoS.
+# Declared explicitly (not assumed to ship with the host) since
+# feedpakr_safe_xml.py falls back to stdlib with a logged warning if
+# somehow absent at runtime.
+defusedxml>=0.7.1

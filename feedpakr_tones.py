@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from xml.etree import ElementTree as ET
 
+from feedpakr_safe_xml import safe_parse
+
 try:
     import gp2rs
 except ImportError:  # pragma: no cover
@@ -55,7 +57,7 @@ def parse_tones_xml(xml_path: str) -> dict | None:
     """Read a `<tonebase>`/`<tones>` block back out of a converted RS XML
     (gp2rs_gpx writes these for GPIF sources; gp2rs never does for GP3-5)."""
     try:
-        tree = ET.parse(xml_path)
+        tree = safe_parse(xml_path)
     except ET.ParseError:
         return None
     root = tree.getroot()
