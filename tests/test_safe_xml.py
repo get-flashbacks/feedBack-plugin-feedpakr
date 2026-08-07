@@ -48,7 +48,7 @@ TONES_XML = """<?xml version="1.0"?>
   <tones count="1">
     <tone id="0" name="Clean Guitar" time="0.000"/>
   </tones>
-</song>"""
+ </song>"""
 
 
 def test_defusedxml_is_actually_installed():
@@ -96,10 +96,10 @@ def test_parse_tones_xml_treats_billion_laughs_as_unparseable(tmp_path):
     """feedpakr_tones.py:58 — parse_tones_xml() already catches
     ET.ParseError and returns None for malformed XML; a rejected
     entity-expansion attack must degrade the same way, not raise
-    something the existing except clause doesn't catch. Tones-shaped
-    payload (the expansion inside <tonebase>) so an unhardened parse
-    would succeed and return data — only the hardened rejection can
-    produce None here."""
+    something the existing except clause doesn't catch. Uses the
+    tones-shaped bomb (not the <vocals>-rooted one) so an unprotected
+    parse would actually produce a non-None result here, proving
+    hardening — not just the payload's shape — is what causes None."""
     p = tmp_path / "bomb.xml"
     p.write_text(TONES_BILLION_LAUGHS, encoding="utf-8")
     assert tones_mod.parse_tones_xml(str(p)) is None
@@ -129,8 +129,8 @@ def test_parse_tones_xml_still_works_on_normal_xml(tmp_path):
 @pytest.fixture
 def defusedxml_unavailable(monkeypatch):
     """Simulates defusedxml being uninstalled, rather than asserting on the
-    private _HAVE_DEFUSEDXML flag — proves the *behavior* (fail-closed raise,
-    one-time warning) that flag is a proxy for, instead of just checking the
+    private _HAVE_DEFUSEDXML flag — proves the *behavior* (fail closed,
+    deferred log) that flag is a proxy for, instead of just checking the
     proxy itself.
     """
     monkeypatch.setitem(sys.modules, "defusedxml", None)
@@ -151,34 +151,51 @@ def defusedxml_unavailable(monkeypatch):
         importlib.reload(safe_xml)
 
 
-def test_safe_parse_fails_closed_and_warns_once_when_defusedxml_is_absent(
+def test_safe_parse_fails_closed_and_logs_once_when_defusedxml_is_absent(
     tmp_path, defusedxml_unavailable, caplog
 ):
+    """Fails CLOSED: with the hardening dependency missing, safe_parse()
+    must refuse to parse untrusted XML at all — never silently fall back
+    to unprotected stdlib ET (review feedback on #39). Also confirms the
+    missing-dependency log line is deferred to first call, not reload/
+    import time, and fires only once even across repeated calls."""
     p = tmp_path / "bomb.xml"
     p.write_text(BILLION_LAUGHS, encoding="utf-8")
 
-    with caplog.at_level(logging.WARNING, logger="feedBack.plugin.feedpakr"):
-        # No parse has happened yet in this test — the warning must not
-        # have fired just from the reload/import above.
+    with caplog.at_level(logging.ERROR, logger="feedBack.plugin.feedpakr"):
+        # No parse call has happened yet in this test — the log line must
+        # not have fired just from the reload/import above.
         assert not caplog.records
 
-        # Fails closed: without defusedxml the payload is rejected with
-        # ET.ParseError rather than expanded by the vulnerable stdlib
-        # parser (which in this environment DOES resolve the entities).
-        with pytest.raises(ET.ParseError):
+        with pytest.raises(safe_xml.MissingHardenedParserError):
             safe_xml.safe_parse(str(p))
 
         assert len(caplog.records) == 1
-        assert "defusedxml not installed" in caplog.records[0].message
+        assert "defusedxml is not installed" in caplog.records[0].message
 
-        # A second call must not log a second warning.
+        # A second call must fail closed again, but not log a second time.
         caplog.clear()
-        with pytest.raises(ET.ParseError):
+        with pytest.raises(safe_xml.MissingHardenedParserError):
             safe_xml.safe_parse(str(p))
         assert not caplog.records
 
 
-def test_fail_closed_simulation_is_fully_undone_after_the_fixture(tmp_path):
+def test_missing_hardened_parser_error_is_not_caught_as_parse_error(
+    tmp_path, defusedxml_unavailable
+):
+    """parse_tones_xml() (and any future caller) has an
+    `except ET.ParseError: return None` for genuinely malformed/rejected
+    XML — MissingHardenedParserError must NOT be catchable there, or a
+    missing security dependency would silently look identical to "this
+    song just has no tones data" instead of surfacing as the operational
+    problem it is."""
+    p = tmp_path / "arr.xml"
+    p.write_text(TONES_XML, encoding="utf-8")
+    with pytest.raises(safe_xml.MissingHardenedParserError):
+        tones_mod.parse_tones_xml(str(p))
+
+
+def test_fallback_simulation_is_fully_undone_after_the_fixture(tmp_path):
     """Sanity check on the defusedxml_unavailable fixture itself: once a
     test using it finishes, hardened parsing must be back for everyone
     else — this runs after such a test (via file ordering) and reproves
