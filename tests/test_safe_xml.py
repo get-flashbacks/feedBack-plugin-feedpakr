@@ -39,6 +39,26 @@ TONES_XML = """<?xml version="1.0"?>
   </tones>
 </song>"""
 
+# Same entity-expansion structure as BILLION_LAUGHS, but with the bomb
+# placed as <tonebase>'s text instead of <vocals>'s. This matters: a
+# <vocals>-rooted payload has no <tonebase>/<tones> for parse_tones_xml to
+# find regardless of whether parsing was hardened, so it returns None
+# either way and can't actually prove hardening did anything (review
+# feedback on #39 — confirmed by running this exact payload through plain
+# stdlib ET.fromstring: it parses successfully with a fully-expanded
+# 30000-char <tonebase> text, i.e. an unprotected parse here WOULD yield a
+# non-None result). This shape closes that gap.
+TONES_BILLION_LAUGHS = """<?xml version="1.0"?>
+<!DOCTYPE lolz [
+ <!ENTITY lol "lol">
+ <!ENTITY lol1 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">
+ <!ENTITY lol2 "&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;">
+ <!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">
+ <!ENTITY lol4 "&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;">
+]>
+<song><tonebase>&lol4;</tonebase></song>
+"""
+
 
 def test_safe_parse_rejects_billion_laughs(tmp_path):
     p = tmp_path / "bomb.xml"
@@ -75,9 +95,12 @@ def test_parse_tones_xml_treats_billion_laughs_as_unparseable(tmp_path):
     """feedpakr_tones.py:58 — parse_tones_xml() already catches
     ET.ParseError and returns None for malformed XML; a rejected
     entity-expansion attack must degrade the same way, not raise
-    something the existing except clause doesn't catch."""
+    something the existing except clause doesn't catch. Uses the
+    tones-shaped bomb (not the <vocals>-rooted one) so an unprotected
+    parse would actually produce a non-None result here, proving
+    hardening — not just the payload's shape — is what causes None."""
     p = tmp_path / "bomb.xml"
-    p.write_text(BILLION_LAUGHS, encoding="utf-8")
+    p.write_text(TONES_BILLION_LAUGHS, encoding="utf-8")
     assert tones_mod.parse_tones_xml(str(p)) is None
 
 
@@ -105,9 +128,9 @@ def test_parse_tones_xml_still_works_on_normal_xml(tmp_path):
 @pytest.fixture
 def defusedxml_unavailable(monkeypatch):
     """Simulates defusedxml being uninstalled, rather than asserting on the
-    private _HAVE_DEFUSEDXML flag — proves the *behavior* (unprotected
-    parsing, deferred warning) that flag is a proxy for, instead of just
-    checking the proxy itself.
+    private _HAVE_DEFUSEDXML flag — proves the *behavior* (fail closed,
+    deferred log) that flag is a proxy for, instead of just checking the
+    proxy itself.
     """
     monkeypatch.setitem(sys.modules, "defusedxml", None)
     sys.modules.pop("defusedxml.ElementTree", None)
@@ -127,32 +150,48 @@ def defusedxml_unavailable(monkeypatch):
         importlib.reload(safe_xml)
 
 
-def test_safe_parse_falls_back_to_stdlib_and_warns_once_when_defusedxml_is_absent(
+def test_safe_parse_fails_closed_and_logs_once_when_defusedxml_is_absent(
     tmp_path, defusedxml_unavailable, caplog
 ):
+    """Fails CLOSED: with the hardening dependency missing, safe_parse()
+    must refuse to parse untrusted XML at all — never silently fall back
+    to unprotected stdlib ET (review feedback on #39). Also confirms the
+    missing-dependency log line is deferred to first call, not reload/
+    import time, and fires only once even across repeated calls."""
     p = tmp_path / "bomb.xml"
     p.write_text(BILLION_LAUGHS, encoding="utf-8")
 
-    with caplog.at_level(logging.WARNING, logger="feedBack.plugin.feedpakr"):
-        # No import has happened yet in this test — the warning must not
-        # have fired just from the reload/import above.
+    with caplog.at_level(logging.ERROR, logger="feedBack.plugin.feedpakr"):
+        # No parse call has happened yet in this test — the log line must
+        # not have fired just from the reload/import above.
         assert not caplog.records
 
-        # The fallback path parses with plain stdlib ET, which (in this
-        # environment) does NOT protect against entity expansion — so this
-        # must succeed rather than raise, proving defusedxml (not some
-        # other factor) is what blocks the payload in every other test in
-        # this file.
-        tree = safe_xml.safe_parse(str(p))
-        assert tree.getroot().text == "lol" * (10 ** 4)
+        with pytest.raises(safe_xml.MissingHardenedParserError):
+            safe_xml.safe_parse(str(p))
 
         assert len(caplog.records) == 1
-        assert "defusedxml not installed" in caplog.records[0].message
+        assert "defusedxml is not installed" in caplog.records[0].message
 
-        # A second call must not log a second warning.
+        # A second call must fail closed again, but not log a second time.
         caplog.clear()
-        safe_xml.safe_parse(str(p))
+        with pytest.raises(safe_xml.MissingHardenedParserError):
+            safe_xml.safe_parse(str(p))
         assert not caplog.records
+
+
+def test_missing_hardened_parser_error_is_not_caught_as_parse_error(
+    tmp_path, defusedxml_unavailable
+):
+    """parse_tones_xml() (and any future caller) has an
+    `except ET.ParseError: return None` for genuinely malformed/rejected
+    XML — MissingHardenedParserError must NOT be catchable there, or a
+    missing security dependency would silently look identical to "this
+    song just has no tones data" instead of surfacing as the operational
+    problem it is."""
+    p = tmp_path / "arr.xml"
+    p.write_text(TONES_XML, encoding="utf-8")
+    with pytest.raises(safe_xml.MissingHardenedParserError):
+        tones_mod.parse_tones_xml(str(p))
 
 
 def test_fallback_simulation_is_fully_undone_after_the_fixture(tmp_path):
