@@ -5,9 +5,10 @@ Both callers parse arrangement XML that gp2rs_gpx.convert_file wrote from
 an uploaded, untrusted GP/GPX source — a crafted file could carry a DOCTYPE
 with external entities or nested entity expansion ("billion laughs").
 xml.etree.ElementTree resolves both; defusedxml.ElementTree hardens
-parsing against them when installed, falling back to stdlib with a logged
-warning otherwise (same pattern already used by the feedBack host's own
-lib/gp8_audio_sync.py / lib/gp_autosync.py).
+parsing against them. defusedxml is a hard requirement (declared in
+requirements.txt): if it's somehow absent at runtime this fails closed —
+raising ET.ParseError rather than reverting to the vulnerable stdlib
+parser — and a warning is logged at import time.
 
 defusedxml's rejection exceptions are normalised to ET.ParseError so
 existing ``except ET.ParseError:`` call sites keep working unmodified.
@@ -33,10 +34,14 @@ except ImportError:
     )
 
 
-def safe_parse(source):
-    """Hardened equivalent of ``ET.parse(source)``."""
+def safe_parse(source: str) -> ET.ElementTree:
+    """Hardened equivalent of ``ET.parse(source)`` — fails closed if
+    defusedxml is missing rather than parsing untrusted XML unhardened."""
     if not _HAVE_DEFUSEDXML:
-        return ET.parse(source)
+        raise ET.ParseError(
+            'defusedxml not installed; refusing to parse untrusted XML with '
+            'stdlib xml.etree (install defusedxml for hardened parsing)'
+        )
     try:
         return _safe_ET.parse(source)
     except _DefusedXmlException as e:

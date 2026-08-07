@@ -5,7 +5,7 @@ jsonschema>=4.20,<5
 # Hardened XML parsing for untrusted GP-derived arrangement XML
 # (feedpakr_safe_xml.py, used by feedpakr_lyrics.py / feedpakr_tones.py) —
 # guards xml.etree.ElementTree.parse against XXE / entity-expansion DoS.
-# Declared explicitly (not assumed to ship with the host) since
-# feedpakr_safe_xml.py falls back to stdlib with a logged warning if
-# somehow absent at runtime.
+# Declared explicitly (not assumed to ship with the host): safe_parse fails
+# closed (raises ET.ParseError) if this is somehow absent at runtime rather
+# than parsing untrusted XML with the vulnerable stdlib parser.
 defusedxml>=0.7.1
