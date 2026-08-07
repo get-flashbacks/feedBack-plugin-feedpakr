@@ -28,6 +28,7 @@ import json
 import logging
 import shutil
 import tempfile
+import zipfile
 from pathlib import Path
 
 try:
@@ -67,6 +68,13 @@ _GPX_EXTS = {'.gpx', '.gp'}  # GP6 / GP7-8, GPIF XML path
 
 ALLOWED_ARRANGEMENT_NAMES = {'Lead', 'Rhythm', 'Bass', 'Drums', 'Keys', 'Vocals'}
 
+# Cap on the decompressed size of the GPIF XML member inside a .gpx/.gp
+# archive. .gpx files are zip-compressed, so a small upload can expand to
+# an arbitrarily large XML document — this is the decompression-bomb vector
+# flagged in the security audit. 150 MB is generous for any real Guitar Pro
+# file; a crafted bomb would be orders of magnitude larger.
+_MAX_GPX_XML_BYTES = 150 * 1024 * 1024  # 150 MB
+
 
 class UnsupportedFormatError(Exception):
     """Raised for a file extension feedpakr does not handle."""
@@ -90,6 +98,38 @@ def _is_gpif(gp_path: str) -> bool:
     return Path(gp_path).suffix.lower() in _GPX_EXTS
 
 
+def _assert_gpx_within_size_limits(gp_path: str) -> None:
+    """Reject a .gpx/.gp archive whose GPIF.gpif member would exceed
+    _MAX_GPX_XML_BYTES when decompressed — guards against the decompression-bomb
+    vector: a small, highly compressed archive entry can exhaust memory when
+    inflated. Reads in bounded chunks rather than trusting ZipInfo.file_size,
+    which is easily spoofed in a crafted archive (stored verbatim from the
+    local-file header, never verified against actual decompressed output until
+    extraction)."""
+    try:
+        with zipfile.ZipFile(gp_path) as zf:
+            try:
+                info = zf.getinfo('GPIF.gpif')
+            except KeyError:
+                # Member absent — either a corrupt file (parse will fail later)
+                # or a future format variant we don't want to block preemptively.
+                return
+            total = 0
+            with zf.open(info) as fh:
+                while True:
+                    chunk = fh.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > _MAX_GPX_XML_BYTES:
+                        raise UnsupportedFormatError(
+                            f'Decompressed GPX content exceeds the '
+                            f'{_MAX_GPX_XML_BYTES // (1024 * 1024)} MB limit.'
+                        )
+    except zipfile.BadZipFile as e:
+        raise UnsupportedFormatError(f'Not a valid GPX archive: {e}') from e
+
+
 def _check_extension(gp_path: str) -> None:
     ext = Path(gp_path).suffix.lower()
     if ext not in _GP345_EXTS and ext not in _GPX_EXTS:
@@ -102,6 +142,8 @@ def _check_extension(gp_path: str) -> None:
         raise UnsupportedFormatError(
             f'{ext} needs pyguitarpro, which is not available on this host.'
         )
+    if ext in _GPX_EXTS:
+        _assert_gpx_within_size_limits(gp_path)
 
 
 def _manifest_arrangement_zero_has_phrases(manifest: dict, arrangement_files: dict[str, dict]) -> bool:

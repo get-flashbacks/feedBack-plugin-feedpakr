@@ -102,6 +102,11 @@ _MAX_AUDIO_BYTES = 60 * 1024 * 1024
 # than a single recording upload.
 _MAX_EXISTING_PACK_BYTES = 250 * 1024 * 1024
 
+# Maximum seconds to wait for GP file parsing (parse_gp runs in an executor
+# thread — this caps the wall-clock time a pathological file can hold a
+# worker slot).
+_PARSE_TIMEOUT_SECS = 60
+
 # Server-side upload registry: opaque token -> {gp_path, cover_path, audio_path, ts}.
 # The build WS receives only the token, never a filesystem path — see the
 # same rationale in musicxml-import/routes.py.
@@ -197,7 +202,24 @@ def setup(app, context):
         gp_path.write_bytes(gp_bytes)
 
         try:
-            parsed = _pipeline.parse_gp(str(gp_path))
+            loop = asyncio.get_running_loop()
+            parsed = await asyncio.wait_for(
+                loop.run_in_executor(None, _pipeline.parse_gp, str(gp_path)),
+                timeout=_PARSE_TIMEOUT_SECS,
+            )
+        except asyncio.TimeoutError:
+            # The executor thread may still be running parse_gp and holding
+            # open file handles inside tmp_dir — don't rmtree synchronously
+            # while it's live (races on Windows; undefined-behaviour on all
+            # platforms). Register the dir as an already-expired upload entry
+            # so _purge_stale_uploads() can collect it safely on the next call
+            # once the thread has naturally finished.
+            _uploads[secrets.token_hex(16)] = {
+                'dir': tmp_dir, 'gp_path': gp_path,
+                'cover_path': None, 'audio_path': None,
+                'ts': time.monotonic() - _UPLOAD_TTL_SECONDS - 1,
+            }
+            return {'error': 'GP file parsing timed out — file may be too complex or malformed'}
         except _pipeline.UnsupportedFormatError as e:
             shutil.rmtree(tmp_dir, ignore_errors=True)
             return {'error': str(e)}
