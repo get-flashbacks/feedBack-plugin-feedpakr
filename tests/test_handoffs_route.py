@@ -124,7 +124,7 @@ def test_upload_gp_returns_error_on_parse_timeout(monkeypatch):
     routes = _load_routes(monkeypatch)
 
     def _slow_parse_gp(_path):
-        time.sleep(5)  # much longer than the patched timeout
+        time.sleep(0.2)  # longer than the patched 50 ms timeout
         return {}
 
     def load_sibling(name):
@@ -159,3 +159,10 @@ def test_upload_gp_returns_error_on_parse_timeout(monkeypatch):
 
     assert 'error' in result
     assert 'timed out' in result['error'].lower()
+
+    # The timed-out dir must be registered as an upload entry with a deferred
+    # TTL, so _purge_stale_uploads() won't rmtree it until the parse window
+    # (plus grace) has elapsed and the executor thread has dropped its handles.
+    entries = list(routes._uploads.values())
+    assert len(entries) == 1
+    assert time.monotonic() - entries[0]['ts'] < routes._UPLOAD_TTL_SECONDS

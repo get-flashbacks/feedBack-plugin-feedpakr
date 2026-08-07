@@ -103,9 +103,15 @@ _MAX_AUDIO_BYTES = 60 * 1024 * 1024
 _MAX_EXISTING_PACK_BYTES = 250 * 1024 * 1024
 
 # Maximum seconds to wait for GP file parsing (parse_gp runs in an executor
-# thread — this caps the wall-clock time a pathological file can hold a
-# worker slot).
+# thread). wait_for bounds the response time and keeps the event loop free,
+# but Python threads can't be killed — a hung parse still occupies its worker
+# slot until it returns.
 _PARSE_TIMEOUT_SECS = 60
+
+# Extra seconds a timed-out upload's temp dir is kept collectable before the
+# stale-upload purger may remove it — gives the executor thread that blew the
+# parse timeout a window to finish and drop its open handles.
+_PARSE_TIMEOUT_GRACE_SECS = 5
 
 # Server-side upload registry: opaque token -> {gp_path, cover_path, audio_path, ts}.
 # The build WS receives only the token, never a filesystem path — see the
@@ -208,16 +214,18 @@ def setup(app, context):
                 timeout=_PARSE_TIMEOUT_SECS,
             )
         except asyncio.TimeoutError:
-            # The executor thread may still be running parse_gp and holding
-            # open file handles inside tmp_dir — don't rmtree synchronously
-            # while it's live (races on Windows; undefined-behaviour on all
-            # platforms). Register the dir as an already-expired upload entry
-            # so _purge_stale_uploads() can collect it safely on the next call
-            # once the thread has naturally finished.
+            # wait_for cancels the asyncio future, not the executor thread —
+            # parse_gp may still be running and holding open file handles
+            # inside tmp_dir, so don't rmtree synchronously while it's live
+            # (races on Windows; undefined behaviour on all platforms).
+            # Register the dir as an upload entry whose TTL already accounts
+            # for the parse window (plus a grace period) so _purge_stale_uploads()
+            # won't collect it until the thread has had a chance to finish.
             _uploads[secrets.token_hex(16)] = {
                 'dir': tmp_dir, 'gp_path': gp_path,
                 'cover_path': None, 'audio_path': None,
-                'ts': time.monotonic() - _UPLOAD_TTL_SECONDS - 1,
+                'ts': time.monotonic() - _UPLOAD_TTL_SECONDS
+                      + _PARSE_TIMEOUT_SECS + _PARSE_TIMEOUT_GRACE_SECS,
             }
             return {'error': 'GP file parsing timed out — file may be too complex or malformed'}
         except _pipeline.UnsupportedFormatError as e:
