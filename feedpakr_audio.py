@@ -10,6 +10,50 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from urllib.parse import urlparse
+
+
+# Allowlist of hostnames accepted by download_youtube_audio.  Only well-known
+# video-hosting domains are permitted; this prevents the function from being
+# used as a generic SSRF primitive via yt-dlp's hundreds of extractors.
+# Bandcamp tracks live on artist subdomains, so it is handled separately via a
+# suffix rule in _is_allowed_video_url rather than an exact entry here.
+_ALLOWED_VIDEO_HOSTS: frozenset[str] = frozenset({
+    'youtube.com',
+    'www.youtube.com',
+    'm.youtube.com',
+    'music.youtube.com',
+    'youtu.be',
+    'vimeo.com',
+    'www.vimeo.com',
+    'player.vimeo.com',
+    'dailymotion.com',
+    'www.dailymotion.com',
+    'soundcloud.com',
+    'www.soundcloud.com',
+    'on.soundcloud.com',
+})
+
+
+def _is_allowed_video_url(url: str) -> bool:
+    """Return True iff *url* targets a known video-hosting domain over http(s).
+
+    Rejects anything non-http(s) (file://, ftp://, …), bare paths, and any
+    host not in the explicit allowlist — including numeric IPs and private-range
+    addresses that yt-dlp would happily fetch server-side.  Bandcamp tracks
+    live on artist subdomains, so any ``<artist>.bandcamp.com`` host is also
+    accepted; those subdomains are Bandcamp-issued, not attacker-registrable.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme not in ('http', 'https'):
+        return False
+    host = (parsed.hostname or '').lower()
+    if not host:
+        return False
+    return host in _ALLOWED_VIDEO_HOSTS or host.endswith('.bandcamp.com')
 
 try:
     import gp2midi
@@ -130,7 +174,17 @@ def transcode_to_ogg(src_path: str, out_path: str, timeout: int = 120):
 
 def download_youtube_audio(url: str, out_dir: str, timeout: int = 300):
     """Fetch a YouTube video's audio track as OGG via yt_dlp. Returns
-    (path, error)."""
+    (path, error).
+
+    Only URLs targeting known video-hosting domains (see _ALLOWED_VIDEO_HOSTS)
+    are accepted; all other URLs are rejected to prevent server-side request
+    forgery via yt-dlp's generic extractors.
+    """
+    if not _is_allowed_video_url(url):
+        return None, (
+            'URL is not from a supported video host. '
+            'Accepted hosts: YouTube, Vimeo, Dailymotion, SoundCloud, Bandcamp.'
+        )
     try:
         import yt_dlp
     except ImportError:
