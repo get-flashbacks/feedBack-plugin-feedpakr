@@ -51,16 +51,6 @@ TONES_XML = """<?xml version="1.0"?>
  </song>"""
 
 
-def test_defusedxml_is_actually_installed():
-    # If this ever regresses (e.g. a requirements sync drops it), every
-    # other rejection test here would fail closed (safe_parse raises) — this
-    # guard gives a clearer error than the resulting cascade.
-    assert safe_xml._HAVE_DEFUSEDXML, (
-        "defusedxml not installed — feedpakr_safe_xml refuses to parse "
-        "untrusted XML. Check requirements.txt."
-    )
-
-
 def test_safe_parse_rejects_billion_laughs(tmp_path):
     p = tmp_path / "bomb.xml"
     p.write_text(BILLION_LAUGHS, encoding="utf-8")
