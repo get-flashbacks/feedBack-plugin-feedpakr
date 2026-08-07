@@ -541,7 +541,10 @@ def _mixdown_stems(stem_paths: list[str], out_path: str, timeout: int = 120) -> 
         '-q:a', '6', out_path,
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=timeout)
+        # cmd is a literal argv list (never a string), so this never invokes
+        # a shell — shell=False is explicit here so that stays true even if
+        # this call is edited later.
+        result = subprocess.run(cmd, capture_output=True, timeout=timeout, shell=False)
     except FileNotFoundError:
         return 'ffmpeg not found — cannot mix stems for syncing.'
     except subprocess.TimeoutExpired:
