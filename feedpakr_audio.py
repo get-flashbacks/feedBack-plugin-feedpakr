@@ -16,6 +16,8 @@ from urllib.parse import urlparse
 # Allowlist of hostnames accepted by download_youtube_audio.  Only well-known
 # video-hosting domains are permitted; this prevents the function from being
 # used as a generic SSRF primitive via yt-dlp's hundreds of extractors.
+# Bandcamp tracks live on artist subdomains, so it is handled separately via a
+# suffix rule in _is_allowed_video_url rather than an exact entry here.
 _ALLOWED_VIDEO_HOSTS: frozenset[str] = frozenset({
     'youtube.com',
     'www.youtube.com',
@@ -29,8 +31,7 @@ _ALLOWED_VIDEO_HOSTS: frozenset[str] = frozenset({
     'www.dailymotion.com',
     'soundcloud.com',
     'www.soundcloud.com',
-    'bandcamp.com',
-    'www.bandcamp.com',
+    'on.soundcloud.com',
 })
 
 
@@ -39,7 +40,9 @@ def _is_allowed_video_url(url: str) -> bool:
 
     Rejects anything non-http(s) (file://, ftp://, …), bare paths, and any
     host not in the explicit allowlist — including numeric IPs and private-range
-    addresses that yt-dlp would happily fetch server-side.
+    addresses that yt-dlp would happily fetch server-side.  Bandcamp tracks
+    live on artist subdomains, so any ``<artist>.bandcamp.com`` host is also
+    accepted; those subdomains are Bandcamp-issued, not attacker-registrable.
     """
     try:
         parsed = urlparse(url)
@@ -50,7 +53,7 @@ def _is_allowed_video_url(url: str) -> bool:
     host = (parsed.hostname or '').lower()
     if not host:
         return False
-    return host in _ALLOWED_VIDEO_HOSTS
+    return host in _ALLOWED_VIDEO_HOSTS or host.endswith('.bandcamp.com')
 
 try:
     import gp2midi

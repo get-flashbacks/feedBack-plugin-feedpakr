@@ -114,8 +114,8 @@ def test_youtube_download_fallback_accepts_valid_formats(tmp_path):
     'https://www.dailymotion.com/video/x8g7x1t',
     'https://soundcloud.com/artist/track',
     'https://www.soundcloud.com/artist/track',
-    'https://bandcamp.com/track/song',
-    'https://www.bandcamp.com/track/song',
+    'https://on.soundcloud.com/xYzAb',
+    'https://someartist.bandcamp.com/track/song',
     'http://youtube.com/watch?v=dQw4w9WgXcQ',
 ])
 def test_is_allowed_video_url_accepts_known_hosts(url):
@@ -139,6 +139,8 @@ def test_is_allowed_video_url_accepts_known_hosts(url):
     # Allowlist bypass attempts
     'https://evil.com/path?x=youtube.com',
     'https://youtube.com.evil.com/',
+    'https://bandcamp.com.evil.com/',
+    'https://evilbandcamp.com/',
     # Empty
     '',
 ])
