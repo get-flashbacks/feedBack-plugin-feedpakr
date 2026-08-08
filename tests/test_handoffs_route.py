@@ -1,6 +1,8 @@
 import asyncio
+import base64
 import importlib
 import sys
+import time
 import types
 
 
@@ -114,3 +116,60 @@ def test_handoffs_route_reports_missing_sibling_endpoints(monkeypatch):
     assert asyncio.run(handler()) == {
         'handoffs': {'preview': False, 'split': False},
     }
+
+
+def test_upload_gp_returns_error_on_parse_timeout(monkeypatch):
+    """If parse_gp hangs beyond _PARSE_TIMEOUT_SECS the upload handler must
+    return an error dict rather than blocking the event loop indefinitely."""
+    routes = _load_routes(monkeypatch)
+
+    def _slow_parse_gp(_path):
+        time.sleep(0.2)  # longer than the patched 50 ms timeout
+        return {}
+
+    def load_sibling(name):
+        mod = types.SimpleNamespace()
+        if name == 'feedpakr_pipeline':
+            mod.configure_sibling_loader = lambda loader: None
+            mod.parse_gp = _slow_parse_gp
+            mod.UnsupportedFormatError = Exception
+        return mod
+
+    ctx = {
+        'get_dlc_dir': lambda: None,
+        'extract_meta': lambda path: {},
+        'meta_db': types.SimpleNamespace(put=lambda *args, **kwargs: None),
+        'log': types.SimpleNamespace(
+            info=lambda *args, **kwargs: None,
+            warning=lambda *args, **kwargs: None,
+            exception=lambda *args, **kwargs: None,
+        ),
+        'load_sibling': load_sibling,
+    }
+
+    app = _FakeApp()
+    routes.setup(app, ctx)
+
+    # Shrink the timeout to 50 ms so the test completes quickly.
+    monkeypatch.setattr(routes, '_PARSE_TIMEOUT_SECS', 0.05)
+
+    # Guard against regressions: the temp dir must not be rmtree'd while the
+    # slow parse thread may still hold it open (the Windows race this
+    # deferred-TTL mechanism exists to avoid).
+    rmtree_calls = []
+    monkeypatch.setattr(routes.shutil, 'rmtree', lambda path, **kw: rmtree_calls.append(path))
+
+    handler = app.handlers[('POST', '/api/plugins/feedpakr/upload')]
+    dummy_gp = base64.b64encode(b'\x00' * 16).decode()
+    result = asyncio.run(handler({'filename': 'song.gp5', 'data': dummy_gp}))
+
+    assert 'error' in result
+    assert 'timed out' in result['error'].lower()
+
+    # The timed-out dir must be registered as an upload entry with a deferred
+    # TTL, so _purge_stale_uploads() won't rmtree it until the parse window
+    # (plus grace) has elapsed and the executor thread has dropped its handles.
+    entries = list(routes._uploads.values())
+    assert len(entries) == 1
+    assert time.monotonic() - entries[0]['ts'] < routes._UPLOAD_TTL_SECONDS
+    assert not rmtree_calls, "shutil.rmtree must not be called on parse timeout"
