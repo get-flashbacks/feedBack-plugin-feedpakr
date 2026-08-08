@@ -112,8 +112,8 @@ def _assert_gpif_within_size_limits(gp_path: str) -> None:
     ZipInfo.file_size, which is easily spoofed in a crafted archive (stored
     verbatim from the local-file header, never verified against actual
     decompressed output until extraction)."""
-    with open(gp_path, 'rb') as fh:
-        if fh.read(2) != b'PK':
+    with open(gp_path, 'rb') as magic_fh:
+        if magic_fh.read(2) != b'PK':
             return  # not a zip container — the host's magic dispatcher handles it
     try:
         with zipfile.ZipFile(gp_path) as zf:
@@ -124,16 +124,16 @@ def _assert_gpif_within_size_limits(gp_path: str) -> None:
                 # or a future format variant we don't want to block preemptively.
                 return
             total = 0
-            with zf.open(info) as fh:
+            with zf.open(info) as member_fh:
                 while True:
-                    chunk = fh.read(1024 * 1024)
+                    chunk = member_fh.read(1024 * 1024)
                     if not chunk:
                         break
                     total += len(chunk)
                     if total > _MAX_GPIF_XML_BYTES:
                         raise UnsupportedFormatError(
                             f'Decompressed GPIF content exceeds the '
-                            f'{_MAX_GPIF_XML_BYTES // (1024 * 1024)} MB limit.'
+                            f'{_MAX_GPIF_XML_BYTES / (1024 * 1024):.1f} MB limit.'
                         )
     except (zipfile.BadZipFile, zlib.error) as e:
         raise UnsupportedFormatError(f'Not a valid Guitar Pro archive: {e}') from e

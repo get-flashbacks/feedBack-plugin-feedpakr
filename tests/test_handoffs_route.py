@@ -153,6 +153,12 @@ def test_upload_gp_returns_error_on_parse_timeout(monkeypatch):
     # Shrink the timeout to 50 ms so the test completes quickly.
     monkeypatch.setattr(routes, '_PARSE_TIMEOUT_SECS', 0.05)
 
+    # Guard against regressions: the temp dir must not be rmtree'd while the
+    # slow parse thread may still hold it open (the Windows race this
+    # deferred-TTL mechanism exists to avoid).
+    rmtree_calls = []
+    monkeypatch.setattr(routes.shutil, 'rmtree', lambda path, **kw: rmtree_calls.append(path))
+
     handler = app.handlers[('POST', '/api/plugins/feedpakr/upload')]
     dummy_gp = base64.b64encode(b'\x00' * 16).decode()
     result = asyncio.run(handler({'filename': 'song.gp5', 'data': dummy_gp}))
@@ -166,3 +172,4 @@ def test_upload_gp_returns_error_on_parse_timeout(monkeypatch):
     entries = list(routes._uploads.values())
     assert len(entries) == 1
     assert time.monotonic() - entries[0]['ts'] < routes._UPLOAD_TTL_SECONDS
+    assert not rmtree_calls, "shutil.rmtree must not be called on parse timeout"
