@@ -33,9 +33,20 @@ gp8_fixture_available = pytest.mark.skipif(
 )
 
 
-def test_check_extension_accepts_gpx_and_gp():
-    pipeline._check_extension('song.gpx')  # must not raise
-    pipeline._check_extension('song.gp')
+def test_check_extension_accepts_gpx_and_gp(tmp_path):
+    # _check_extension now reads the file's magic bytes (decompression-bomb
+    # guard, feedpakr#37) as part of the extension check, so it needs a real
+    # file on disk rather than a bare placeholder path. .gpx (GP6) is a
+    # BCFZ-magic container; .gp (GP7/8) is a zip — an empty/non-PK file for
+    # .gp is enough to hit the guard's "not a zip container, pass through"
+    # branch, matching test_gpx_safety.py's fixture conventions.
+    gpx_path = tmp_path / 'song.gpx'
+    gpx_path.write_bytes(b'BCFZ')
+    pipeline._check_extension(str(gpx_path))  # must not raise
+
+    gp_path = tmp_path / 'song.gp'
+    gp_path.write_bytes(b'')
+    pipeline._check_extension(str(gp_path))
 
 
 def test_check_extension_rejects_unknown():
