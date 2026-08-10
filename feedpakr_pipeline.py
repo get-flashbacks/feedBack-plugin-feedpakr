@@ -1004,12 +1004,18 @@ def build_feedpak(
                     )
 
         report('Extracting lyrics…', 72)
+        # True only when lyrics_entries came from the GP3-5 fallback below —
+        # never from the GPIF <vocals> XML path (exact per-note timing,
+        # nothing to re-sync). Surfaced in `features` for the lyrics_sync
+        # handoff button (see screen.js) to gate on.
+        lyrics_approximate = False
         if lyrics_entries is None and not is_gpif and gp_song is not None and song_meta is not None:
             try:
                 lyrics_entries = lyrics_mod.extract_gp345_lyrics(
                     gp_song, track_indices, song_timeline.get('beats', []) if song_timeline else [],
                 )
                 if lyrics_entries:
+                    lyrics_approximate = True
                     warnings.append(
                         'Lyrics timing is approximate (GP3/4/5 only stores one lyric '
                         'line per measure, not per-note timing).'
@@ -1120,6 +1126,7 @@ def build_feedpak(
             'features': {
                 'song_timeline': song_timeline is not None,
                 'lyrics': bool(lyrics_entries),
+                'lyrics_approximate': lyrics_approximate,
                 'keys': keys_data is not None,
                 'vocal_pitch': vocal_pitch_data is not None,
                 'drum_arrangements': len(drum_tab_files),

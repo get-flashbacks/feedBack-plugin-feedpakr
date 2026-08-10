@@ -54,6 +54,13 @@ for the pattern this is deliberately consistent with):
   POST /api/plugins/feedpakr/validate
     Validates an existing DLC-relative .feedpak against vendored schemas.
 
+  GET  /api/plugins/feedpakr/lyrics-text
+    Reconstructs plain-text lyrics from an existing DLC-relative feedpak's
+    own lyrics.json (spec §7.1 entries -> readable text), for the
+    lyrics_sync handoff below — that plugin's /align endpoint wants plain
+    text, not pre-synced entries. Reads back only what this plugin already
+    wrote; never generates or re-times lyrics itself.
+
   GET  /api/plugins/feedpakr/sloppaks
     Lists every .sloppak under the DLC folder, for the Upgrade Library tab.
 
@@ -61,16 +68,21 @@ for the pattern this is deliberately consistent with):
     Batch-converts selected .sloppak files to .feedpak, streaming
     per-file progress. Originals are never modified or deleted.
 
-Post-import handoffs to the song-preview / stem-splitter plugins (when
-installed) are invoked client-side in screen.js. The backend also exposes
-a read-only availability endpoint so callers can ask the host which sibling
-handoff routes are currently registered.
+Post-import handoffs to the song-preview / stem-splitter / lyrics_sync
+plugins (when installed) are invoked client-side in screen.js. The backend
+also exposes a read-only availability endpoint (`/handoffs`, above) so
+callers can ask the host which sibling handoff routes are currently
+registered, plus (for lyrics_sync only) `/lyrics-text` to read back this
+plugin's own already-written lyrics.json as plain text — there is nothing
+else for this module to proxy since the sibling plugins expose their own
+same-origin REST endpoints.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import re
 import secrets
 import shutil
@@ -90,6 +102,7 @@ _pack = None
 _audio = None
 _upgrade = None
 _validate = None
+_lyrics = None
 
 # GP files are binary (zip-compressed for .gpx/.gp, raw for .gp3/4/5) and
 # can run larger than a MusicXML score — 30 MB comfortably covers real-world
@@ -168,7 +181,7 @@ def _route_registered(app, method: str, path: str) -> bool:
 
 
 def setup(app, context):
-    global _get_dlc_dir, _extract_meta, _meta_db, _log, _pipeline, _pack, _audio, _upgrade, _validate
+    global _get_dlc_dir, _extract_meta, _meta_db, _log, _pipeline, _pack, _audio, _upgrade, _validate, _lyrics
     _get_dlc_dir = context['get_dlc_dir']
     _extract_meta = context['extract_meta']
     _meta_db = context['meta_db']
@@ -179,6 +192,7 @@ def setup(app, context):
     _audio = context['load_sibling']('feedpakr_audio')
     _upgrade = context['load_sibling']('feedpakr_upgrade')
     _validate = context['load_sibling']('feedpakr_validate')
+    _lyrics = context['load_sibling']('feedpakr_lyrics')
 
     @app.get('/api/plugins/feedpakr/handoffs')
     async def handoffs():
@@ -325,7 +339,6 @@ def setup(app, context):
     def _mb_release_group_covers(artist: str, query: str) -> list:
         """Release-group search -> [{id, title, year, studio}], studio
         albums first."""
-        import json as _json
         import urllib.request
         import urllib.parse
 
@@ -345,7 +358,7 @@ def setup(app, context):
         try:
             req = urllib.request.Request(url, headers={'User-Agent': _CAA_UA})
             with urllib.request.urlopen(req, timeout=15) as resp:
-                body = _json.loads(resp.read().decode('utf-8', 'replace'))
+                body = json.loads(resp.read().decode('utf-8', 'replace'))
         except Exception:
             return []
         out = []
@@ -773,6 +786,61 @@ def setup(app, context):
             _log.warning('feedpakr: validation failed for %r', rel, exc_info=True)
             return {'error': str(exc)}
         return {'ok': not report, 'validation': report}
+
+    @app.get('/api/plugins/feedpakr/lyrics-text')
+    def lyrics_text_for_pack(file: str = ''):
+        """Reconstruct plain-text lyrics from an existing DLC-relative
+        feedpak's own lyrics.json, for handing off to a forced aligner
+        (lyrics_sync's /align) that wants plain text rather than pre-synced
+        timing. Only meaningful for GP3-5 imports, whose build marked
+        `features.lyrics_approximate` (see feedpakr_pipeline.py) — feedpakr
+        itself never re-syncs anything, it just reads back what it already
+        wrote so lyrics_sync has something to align against.
+        """
+        dlc = _get_dlc_dir()
+        if not dlc:
+            return JSONResponse({'error': 'DLC folder not configured'}, 400)
+        rel = (file or '').strip()
+        if not rel:
+            return JSONResponse({'error': 'file is required'}, 400)
+        dlc_root = Path(dlc).resolve()
+        target = (dlc_root / rel).resolve()
+        try:
+            target.relative_to(dlc_root)
+        except ValueError:
+            return JSONResponse({'error': 'Path escapes the DLC folder'}, 400)
+        if target.suffix.lower() != '.feedpak' or not target.is_file():
+            return JSONResponse({'error': 'Feedpak file not found'}, 404)
+
+        # Reuse the same optional import feedpakr_upgrade already guards
+        # (host without the sloppak module installed) rather than a bare
+        # import — matches how list_sloppaks reads _upgrade.sloppak_mod.
+        sloppak_mod = _upgrade.sloppak_mod
+        if sloppak_mod is None:
+            return JSONResponse({'error': 'sloppak module not available'}, 500)
+        try:
+            manifest = sloppak_mod.load_manifest(target) or {}
+        except Exception as exc:
+            _log.warning('feedpakr: manifest read failed for %r', rel, exc_info=True)
+            return JSONResponse({'error': str(exc)}, 400)
+        lyrics_rel = manifest.get('lyrics')
+        if not lyrics_rel:
+            return JSONResponse({'error': 'This pack has no lyrics'}, 404)
+
+        raw = sloppak_mod.read_member_bytes(target, lyrics_rel)
+        if raw is None:
+            return JSONResponse({'error': 'lyrics.json referenced by the manifest is missing'}, 404)
+        try:
+            entries = json.loads(raw.decode('utf-8'))
+        except Exception:
+            return JSONResponse({'error': 'lyrics.json is not valid JSON'}, 400)
+        if not isinstance(entries, list):
+            return JSONResponse({'error': 'lyrics.json is malformed (expected an array of entries)'}, 400)
+
+        text = _lyrics.reconstruct_plain_text(entries)
+        if not text.strip():
+            return JSONResponse({'error': 'Lyrics are empty'}, 400)
+        return {'lyrics_text': text}
 
     @app.get('/api/plugins/feedpakr/sloppaks')
     async def list_sloppaks():

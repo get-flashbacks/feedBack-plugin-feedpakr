@@ -21,7 +21,7 @@ let _audioAttached = false;
 let _existingPackAttached = false;
 let _sloppaks = [];
 let _upgradeDone = false;
-let _handoffAvailability = { preview: null, split: null, difficulty: null };
+let _handoffAvailability = { preview: null, split: null, lyricsSync: null, difficulty: null };
 
 function esc(s) {
     return String(s)
@@ -526,6 +526,12 @@ async function fprProbeHandoffs() {
             _handoffAvailability.split = r.ok;
         } catch (err) { _handoffAvailability.split = false; }
     }
+    if (_handoffAvailability.lyricsSync === null) {
+        try {
+            const r = await fetch('/api/plugins/lyrics_sync/status');
+            _handoffAvailability.lyricsSync = r.ok;
+        } catch { _handoffAvailability.lyricsSync = false; }
+    }
     if (_handoffAvailability.difficulty === null) {
         try {
             const r = await fetch('/api/plugins/difficulty_ladder/generate', { method: 'OPTIONS' });
@@ -534,7 +540,7 @@ async function fprProbeHandoffs() {
     }
 }
 
-function fprHandoffButtonsHtml(relPath, allowSplit = true, allowDifficulty = true) {
+function fprHandoffButtonsHtml(relPath, allowSplit = true, allowLyricsSync = false, allowDifficulty = true) {
     if (!relPath) return '';
     return `<div class="flex items-center gap-2 mt-2" data-handoff-for="${esc(relPath)}">
         <button data-handoff="preview" data-handoff-path="${esc(relPath)}"
@@ -544,6 +550,10 @@ function fprHandoffButtonsHtml(relPath, allowSplit = true, allowDifficulty = tru
         <button data-handoff="split" data-handoff-path="${esc(relPath)}" data-split-allowed="${allowSplit ? '1' : '0'}"
             class="hidden px-3 py-1 rounded-lg text-xs text-gray-300 bg-dark-600 hover:bg-dark-500 transition">
             Split Stems
+        </button>
+        <button data-handoff="lyrics-sync" data-handoff-path="${esc(relPath)}" data-lyrics-sync-allowed="${allowLyricsSync ? '1' : '0'}"
+            class="hidden px-3 py-1 rounded-lg text-xs text-gray-300 bg-dark-600 hover:bg-dark-500 transition">
+            Sync Lyrics
         </button>
         <button data-handoff="difficulty" data-handoff-path="${esc(relPath)}" data-difficulty-allowed="${allowDifficulty ? '1' : '0'}"
             class="hidden px-3 py-1 rounded-lg text-xs text-gray-300 bg-dark-600 hover:bg-dark-500 transition">
@@ -564,6 +574,11 @@ async function fprWireHandoffButtons(container) {
         if (!_handoffAvailability.split || btn.getAttribute('data-split-allowed') !== '1') return;
         btn.classList.remove('hidden');
         btn.addEventListener('click', () => fprRunHandoff(btn, 'split'));
+    });
+    container.querySelectorAll('[data-handoff="lyrics-sync"]').forEach((btn) => {
+        if (!_handoffAvailability.lyricsSync || btn.getAttribute('data-lyrics-sync-allowed') !== '1') return;
+        btn.classList.remove('hidden');
+        btn.addEventListener('click', () => fprRunLyricsSyncHandoff(btn));
     });
     container.querySelectorAll('[data-handoff="difficulty"]').forEach((btn) => {
         if (!_handoffAvailability.difficulty || btn.getAttribute('data-difficulty-allowed') !== '1') return;
@@ -626,6 +641,62 @@ async function fprRunHandoff(btn, kind) {
     }
 }
 
+// Unlike preview/split (one fetch, feedpakr never touches the result),
+// lyrics_sync needs feedpakr to (1) hand back the pack's own approximate
+// lyrics as plain text — lyrics_sync's /align takes text, not pre-synced
+// entries — then (2) forward the aligned segments it returns straight
+// into lyrics_sync's own /save. feedpakr still never does the syncing
+// itself; it's just relaying its own already-written data through.
+async function fprRunLyricsSyncHandoff(btn) {
+    const relPath = btn.getAttribute('data-handoff-path');
+    const statusEl = btn.parentElement.querySelector('[data-handoff-status]');
+    btn.disabled = true;
+    const setStatus = (text) => { if (statusEl) statusEl.textContent = text; };
+
+    try {
+        setStatus('Reading existing lyrics…');
+        const textResp = await fetch(`/api/plugins/feedpakr/lyrics-text?file=${encodeURIComponent(relPath)}`);
+        const textData = await textResp.json();
+        if (!textResp.ok || textData.error) {
+            setStatus(textData.error || 'Could not read this pack’s lyrics.');
+            btn.disabled = false;
+            return;
+        }
+
+        setStatus('Aligning against the vocals stem…');
+        const alignResp = await fetch('/api/plugins/lyrics_sync/align', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: relPath, lyrics_text: textData.lyrics_text }),
+        });
+        const alignData = await alignResp.json();
+        if (!alignResp.ok || alignData.error || !Array.isArray(alignData.segments)) {
+            setStatus(alignData.error || "Needs setup — check lyrics_sync's Settings page.");
+            btn.disabled = false;
+            return;
+        }
+
+        setStatus('Saving synced lyrics…');
+        const saveResp = await fetch('/api/plugins/lyrics_sync/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: relPath, segments: alignData.segments }),
+        });
+        const saveData = await saveResp.json();
+        if (!saveResp.ok || saveData.error) {
+            setStatus(saveData.error || 'Failed to save synced lyrics.');
+            btn.disabled = false;
+            return;
+        }
+
+        setStatus(`Lyrics re-synced (${saveData.lyrics_count || alignData.segments.length} line(s)).`);
+        btn.classList.add('hidden');
+    } catch (err) {
+        setStatus(`Failed: ${String(err)}`);
+        btn.disabled = false;
+    }
+}
+
 function fprShowResult(msg) {
     document.getElementById('fpr-progress').classList.add('hidden');
     document.getElementById('fpr-result').classList.remove('hidden');
@@ -672,7 +743,7 @@ function fprShowResult(msg) {
             <p class="mt-2">${validityBadge}</p>
             ${featuresHtml}
             ${warningsHtml}
-            ${fprHandoffButtonsHtml(msg.filename_rel, !!f.real_audio && !f.already_separated, !f.phrase_ladder)}
+            ${fprHandoffButtonsHtml(msg.filename_rel, !!f.real_audio && !f.already_separated, !!(f.lyrics_approximate && f.real_audio), !f.phrase_ladder)}
             <button onclick="fprReset()"
                 class="mt-4 px-4 py-2 bg-dark-600 hover:bg-dark-500 rounded-xl text-sm text-gray-300 transition">
                 Import Another
