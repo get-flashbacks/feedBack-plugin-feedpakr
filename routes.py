@@ -309,7 +309,6 @@ def setup(app, context):
     def _mb_release_group_covers(artist: str, query: str) -> list:
         """Release-group search -> [{id, title, year, studio}], studio
         albums first."""
-        import json as _json
         import urllib.request
         import urllib.parse
 
@@ -329,7 +328,7 @@ def setup(app, context):
         try:
             req = urllib.request.Request(url, headers={'User-Agent': _CAA_UA})
             with urllib.request.urlopen(req, timeout=15) as resp:
-                body = _json.loads(resp.read().decode('utf-8', 'replace'))
+                body = json.loads(resp.read().decode('utf-8', 'replace'))
         except Exception:
             return []
         out = []
