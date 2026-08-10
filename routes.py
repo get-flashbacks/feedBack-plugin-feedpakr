@@ -747,10 +747,15 @@ def setup(app, context):
             target.relative_to(dlc_root)
         except ValueError:
             return JSONResponse({'error': 'Path escapes the DLC folder'}, 400)
-        if not target.is_file():
+        if target.suffix.lower() != '.feedpak' or not target.is_file():
             return JSONResponse({'error': 'Feedpak file not found'}, 404)
 
-        import sloppak as sloppak_mod
+        # Reuse the same optional import feedpakr_upgrade already guards
+        # (host without the sloppak module installed) rather than a bare
+        # import — matches how list_sloppaks reads _upgrade.sloppak_mod.
+        sloppak_mod = _upgrade.sloppak_mod
+        if sloppak_mod is None:
+            return JSONResponse({'error': 'sloppak module not available'}, 500)
         try:
             manifest = sloppak_mod.load_manifest(target) or {}
         except Exception as exc:
@@ -767,8 +772,10 @@ def setup(app, context):
             entries = json.loads(raw.decode('utf-8'))
         except Exception:
             return JSONResponse({'error': 'lyrics.json is not valid JSON'}, 400)
+        if not isinstance(entries, list):
+            return JSONResponse({'error': 'lyrics.json is malformed (expected an array of entries)'}, 400)
 
-        text = _lyrics.reconstruct_plain_text(entries if isinstance(entries, list) else [])
+        text = _lyrics.reconstruct_plain_text(entries)
         if not text.strip():
             return JSONResponse({'error': 'Lyrics are empty'}, 400)
         return {'lyrics_text': text}

@@ -52,3 +52,30 @@ def test_reconstruct_plain_text_skips_empty_words():
 
 def test_reconstruct_plain_text_empty_input():
     assert lyrics_mod.reconstruct_plain_text([]) == ''
+
+
+def test_reconstruct_plain_text_skips_none_entries():
+    entries = [
+        {'t': 0.0, 'd': 0.5, 'w': 'a'},
+        None,
+        {'t': 1.0, 'd': 0.5, 'w': 'b+'},
+    ]
+    assert lyrics_mod.reconstruct_plain_text(entries) == 'a b'
+
+
+def test_reconstruct_plain_text_skips_entries_missing_w():
+    entries = [
+        {'t': 0.0, 'd': 0.5, 'w': 'a'},
+        {'t': 0.5, 'd': 0.5},
+        {'t': 1.0, 'd': 0.5, 'w': 'b+'},
+    ]
+    assert lyrics_mod.reconstruct_plain_text(entries) == 'a b'
+
+
+def test_reconstruct_plain_text_coerces_non_string_w():
+    entries = [
+        {'t': 0.0, 'd': 0.5, 'w': 'count'},
+        {'t': 0.5, 'd': 0.5, 'w': 5},
+        {'t': 1.0, 'd': 0.5, 'w': 'end+'},
+    ]
+    assert lyrics_mod.reconstruct_plain_text(entries) == 'count 5 end'

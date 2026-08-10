@@ -530,7 +530,7 @@ async function fprProbeHandoffs() {
         try {
             const r = await fetch('/api/plugins/lyrics_sync/status');
             _handoffAvailability.lyricsSync = r.ok;
-        } catch (err) { _handoffAvailability.lyricsSync = false; }
+        } catch { _handoffAvailability.lyricsSync = false; }
     }
 }
 
@@ -706,7 +706,7 @@ function fprShowResult(msg) {
             <p class="mt-2">${validityBadge}</p>
             ${featuresHtml}
             ${warningsHtml}
-            ${fprHandoffButtonsHtml(msg.filename_rel, !!f.real_audio && !f.already_separated, !!f.lyrics_approximate)}
+            ${fprHandoffButtonsHtml(msg.filename_rel, !!f.real_audio && !f.already_separated, !!(f.lyrics_approximate && f.real_audio))}
             <button onclick="fprReset()"
                 class="mt-4 px-4 py-2 bg-dark-600 hover:bg-dark-500 rounded-xl text-sm text-gray-300 transition">
                 Import Another

@@ -80,13 +80,19 @@ def parse_vocal_pitch_xml(xml_path: str) -> dict | None:
 
 def reconstruct_plain_text(entries: list[dict]) -> str:
     """Rebuild readable plain-text lyrics from feedpak lyrics.json entries
-    (spec §7.1) — the inverse of the *shape* (not the timing) produced by
-    extract_gp345_lyrics() / parse_vocals_xml(). A trailing "-" on `w`
-    joins directly onto the next entry (no space, mid-word split); a
-    trailing "+" ends the current line. Used to hand a pack's own
-    already-extracted (possibly approximate) lyrics back to a forced
-    aligner as plain text, e.g. the lyrics_sync handoff — never called
-    during a normal build.
+    (spec §7.1) — the inverse of the *shape* extract_gp345_lyrics() produces
+    (parse_vocals_xml()'s GPIF output uses the same entry shape but writes
+    `w` verbatim from the source XML, with no "-"/"+" markers of its own —
+    this only round-trips markers a producer actually emitted). A trailing
+    "-" on `w` joins directly onto the next entry (no space, mid-word
+    split); a trailing "+" ends the current line. extract_gp345_lyrics()
+    only ever adds "+" (line ends); a "-" it emits is a literal hyphen
+    already present in the GP3-5 source lyric text, not a synthesized
+    split — reconstructing that case glues the next word on with no space,
+    a known minor rough edge for hyphenated source lyrics. Used to hand a
+    pack's own already-extracted (possibly approximate) lyrics back to a
+    forced aligner as plain text, e.g. the lyrics_sync handoff — never
+    called during a normal build.
     """
     lines: list[str] = []
     current = ''

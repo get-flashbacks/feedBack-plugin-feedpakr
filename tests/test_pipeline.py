@@ -619,12 +619,16 @@ def test_build_feedpak_gpif_lyrics_are_never_marked_approximate():
     """GPIF sources get exact per-syllable timing from the <vocals> XML —
     features['lyrics_approximate'] must stay False even when lyrics are
     present, so the lyrics_sync handoff button never offers to 're-sync'
-    a chart that already has real timing."""
+    a chart that already has real timing. Includes the vocal track (index
+    0, per test_build_feedpak_gpif_vocal_track_becomes_lyrics_not_arrangement)
+    so this actually exercises the lyrics-present case, not a no-lyrics one."""
     result = pipeline.build_feedpak(
         str(MONEY_GP8),
-        track_indices=[1],
-        arrangement_names={1: 'Rhythm'},
+        track_indices=[0, 1],  # Singer (vocal), Rhythm guitar
+        arrangement_names={0: 'Vocals', 1: 'Rhythm'},
         audio_mode='none',
         report=lambda stage, pct: None,
     )
-    assert result['features']['lyrics_approximate'] is False
+    features = result['features']
+    assert features['lyrics'] is True
+    assert features['lyrics_approximate'] is False
