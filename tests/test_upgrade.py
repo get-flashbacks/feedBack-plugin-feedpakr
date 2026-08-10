@@ -49,6 +49,66 @@ def test_stamps_feedpak_version(tmp_path):
     assert manifest['feedpak_version'] == upgrade.FEEDPAK_VERSION
 
 
+def test_features_report_existing_phrase_ladder(tmp_path):
+    src = _write_sloppak(
+        tmp_path,
+        {
+            'title': 'T',
+            'artist': 'A',
+            'duration': 10.0,
+            'stems': [{'id': 'full', 'file': 'stems/full.ogg'}],
+            'arrangements': [{'file': 'arrangements/lead.json', 'name': 'Lead'}],
+        },
+        {
+            'lead.json': {
+                'notes': [],
+                'phrases': [{
+                    'start_time': 0.0,
+                    'end_time': 2.0,
+                    'max_difficulty': 1,
+                    'levels': [],
+                }],
+            },
+        },
+    )
+
+    result = upgrade.upgrade_sloppak(str(src))
+
+    assert result['features']['phrase_ladder'] is True
+
+
+def test_features_ignore_later_arrangement_phrase_ladder(tmp_path):
+    src = _write_sloppak(
+        tmp_path,
+        {
+            'title': 'T',
+            'artist': 'A',
+            'duration': 10.0,
+            'stems': [{'id': 'full', 'file': 'stems/full.ogg'}],
+            'arrangements': [
+                {'file': 'arrangements/lead.json', 'name': 'Lead'},
+                {'file': 'arrangements/rhythm.json', 'name': 'Rhythm'},
+            ],
+        },
+        {
+            'lead.json': {'notes': []},
+            'rhythm.json': {
+                'notes': [],
+                'phrases': [{
+                    'start_time': 0.0,
+                    'end_time': 2.0,
+                    'max_difficulty': 1,
+                    'levels': [],
+                }],
+            },
+        },
+    )
+
+    result = upgrade.upgrade_sloppak(str(src))
+
+    assert result['features']['phrase_ladder'] is False
+
+
 def test_original_file_never_modified(tmp_path):
     src = _write_sloppak(tmp_path, {'title': 'T', 'artist': 'A', 'duration': 10.0,
                                      'stems': [{'id': 'full', 'file': 'x.ogg'}], 'arrangements': []})
@@ -84,6 +144,31 @@ def test_copies_all_files_verbatim(tmp_path):
         assert zf.read('stems/full.ogg') == b'\x00\x01\x02fake-audio'
         assert zf.read('cover.png') == b'\x89PNGfake'
     assert result['features']['real_audio'] is True
+
+
+def test_upgrade_sloppak_rejects_path_traversal_members_in_zip_source(tmp_path):
+    """A zip-form .sloppak with a member named to escape the archive
+    (../.. or an absolute path) must not have that name copied verbatim
+    into the newly-built .feedpak — that would forward a zip-slip payload
+    to whatever later extracts the output file."""
+    zip_path = tmp_path / 'song.sloppak'
+    manifest = {
+        'title': 'T', 'artist': 'A', 'duration': 10.0,
+        'stems': [{'id': 'full', 'file': 'stems/full.ogg'}], 'arrangements': [],
+    }
+    with zipfile.ZipFile(zip_path, 'w') as zf:
+        zf.writestr('manifest.yaml', yaml.safe_dump(manifest, sort_keys=False))
+        zf.writestr('stems/full.ogg', b'OggS-full')
+        zf.writestr('../../../../tmp/evil.txt', b'pwned')
+        zf.writestr('/etc/evil.txt', b'pwned')
+
+    result = upgrade.upgrade_sloppak(str(zip_path))
+    with _unzip(result['bytes']) as zf:
+        names = zf.namelist()
+    assert not any(n.startswith('/') for n in names)
+    assert not any('..' in Path(n).parts for n in names)
+    assert 'stems/full.ogg' in names
+    assert any('unsafe' in w.lower() for w in result['warnings'])
 
 
 def test_midi_rendered_single_stem_disables_real_audio_feature(tmp_path):
@@ -459,6 +544,73 @@ def test_extract_pack_assets_missing_manifest_errors(tmp_path):
     missing = tmp_path / 'does-not-exist.feedpak'
     result = upgrade.extract_pack_assets(missing, tmp_path / 'out')
     assert result['error'] is not None
+
+
+def test_extract_pack_assets_caps_decompressed_member_size(tmp_path, monkeypatch):
+    """A declared stem whose decompressed content exceeds the per-member
+    cap must be skipped (as if unreadable), not fully buffered in memory —
+    guards against a zip-bomb entry disguised as a small upload.
+
+    Forces the module's own zip-fallback code path (sloppak_mod=None) —
+    when the host's real sloppak module is importable (e.g. a full host
+    checkout sits on sys.path, as some dev/test environments have), it
+    would otherwise service the read itself via read_member_bytes(),
+    which isn't code this test is exercising."""
+    monkeypatch.setattr(upgrade, 'sloppak_mod', None)
+    monkeypatch.setattr(upgrade, '_MAX_MEMBER_BYTES', 1024)
+    zip_path = tmp_path / 'song.feedpak'
+    manifest = {'title': 'T', 'artist': 'A', 'duration': 10.0,
+                'stems': [{'id': 'full', 'file': 'stems/full.ogg'}], 'arrangements': []}
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('manifest.yaml', yaml.safe_dump(manifest, sort_keys=False))
+        # Highly compressible payload: tiny on disk, well over the cap once
+        # decompressed — stands in for a real zip-bomb entry.
+        zf.writestr('stems/full.ogg', b'\x00' * 1024 * 1024)
+
+    result = upgrade.extract_pack_assets(zip_path, tmp_path / 'out')
+    assert result['error'] is not None or result.get('warnings')
+    if result['error'] is None:
+        assert result['full_mix_path'] is None
+        assert any('full' in w.lower() for w in result['warnings'])
+
+
+def test_load_manifest_fallback_caps_decompressed_zip_manifest(tmp_path, monkeypatch):
+    """manifest.yaml itself is the first thing read off an untrusted upload,
+    before any other size check runs — a small, highly-compressible
+    manifest.yaml entry must not be fully buffered in memory past the
+    per-member cap (a zip-bomb manifest, not just a zip-bomb stem)."""
+    monkeypatch.setattr(upgrade, '_MAX_MEMBER_BYTES', 1024)
+    zip_path = tmp_path / 'song.sloppak'
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        # Highly compressible payload: tiny on disk, well over the cap once
+        # decompressed — stands in for a real zip-bomb manifest entry.
+        zf.writestr('manifest.yaml', b'a: ' + b'x' * (1024 * 1024))
+
+    with pytest.raises(FileNotFoundError):
+        upgrade._load_manifest_fallback(zip_path)
+
+
+def test_load_manifest_fallback_caps_oversized_dir_manifest(tmp_path, monkeypatch):
+    """Directory-form counterpart of the above: an oversized manifest.yaml
+    file on disk must also be declined rather than read in full."""
+    monkeypatch.setattr(upgrade, '_MAX_MEMBER_BYTES', 1024)
+    src = tmp_path / 'song.sloppak'
+    src.mkdir()
+    (src / 'manifest.yaml').write_bytes(b'a: ' + b'x' * (2 * 1024))
+
+    with pytest.raises(FileNotFoundError):
+        upgrade._load_manifest_fallback(src)
+
+
+def test_load_manifest_fallback_zip_form_still_works_under_cap(tmp_path):
+    """Sanity check: a normal small manifest.yaml is unaffected by the cap."""
+    zip_path = tmp_path / 'song.sloppak'
+    manifest = {'title': 'T', 'artist': 'A', 'duration': 10.0,
+                'stems': [{'id': 'full', 'file': 'stems/full.ogg'}], 'arrangements': []}
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('manifest.yaml', yaml.safe_dump(manifest, sort_keys=False))
+
+    assert upgrade._load_manifest_fallback(zip_path) == manifest
 
 
 def test_extract_pack_assets_zip_form(tmp_path):

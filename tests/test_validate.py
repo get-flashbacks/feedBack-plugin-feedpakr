@@ -153,3 +153,16 @@ def test_validate_feedpak_file_raises_for_corrupt_archive(tmp_path):
     path.write_bytes(b'not a zip')
     with pytest.raises(zipfile.BadZipFile):
         validate.validate_feedpak_file(path)
+
+
+def test_validate_feedpak_file_caps_decompressed_sidecar_size(tmp_path, monkeypatch):
+    """A referenced sidecar whose decompressed content exceeds the
+    per-member cap must be reported as an error, not fully buffered in
+    memory — guards against a zip-bomb entry in a validated .feedpak."""
+    monkeypatch.setattr(validate, '_MAX_VALIDATE_MEMBER_BYTES', 1024)
+    path = tmp_path / 'bomb.feedpak'
+    with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('manifest.yaml', yaml.safe_dump(_valid_manifest()))
+        zf.writestr('arrangements/lead.json', b'{"pad": "' + b'0' * (1024 * 1024) + b'"}')
+    report = validate.validate_feedpak_file(path)
+    assert report['arrangements/lead.json'][0].startswith('<root>: could not parse JSON:')

@@ -101,6 +101,64 @@ def test_youtube_download_fallback_accepts_valid_formats(tmp_path):
     assert all(p.name in ('youtube_audio.mp3', 'youtube_audio.m4a') for p in candidates)
 
 
+# ---------------------------------------------------------------------------
+# _is_allowed_video_url / SSRF guard
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize('url', [
+    'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    'https://youtu.be/dQw4w9WgXcQ',
+    'https://music.youtube.com/watch?v=abc123',
+    'https://vimeo.com/123456789',
+    'https://player.vimeo.com/video/123456789',
+    'https://www.dailymotion.com/video/x8g7x1t',
+    'https://soundcloud.com/artist/track',
+    'https://www.soundcloud.com/artist/track',
+    'https://on.soundcloud.com/xYzAb',
+    'https://someartist.bandcamp.com/track/song',
+    'http://youtube.com/watch?v=dQw4w9WgXcQ',
+])
+def test_is_allowed_video_url_accepts_known_hosts(url):
+    assert audio_mod._is_allowed_video_url(url) is True
+
+
+@pytest.mark.parametrize('url', [
+    # Arbitrary domain
+    'https://example.com/audio.mp3',
+    # Internal / private ranges
+    'http://127.0.0.1/secret',
+    'http://192.168.1.1/admin',
+    'http://10.0.0.1/internal',
+    'http://169.254.169.254/latest/meta-data/',
+    # Non-http schemes
+    'file:///etc/passwd',
+    'ftp://youtube.com/file',
+    # Bare path
+    '/etc/passwd',
+    'not-a-url',
+    # Allowlist bypass attempts
+    'https://evil.com/path?x=youtube.com',
+    'https://youtube.com.evil.com/',
+    'https://bandcamp.com.evil.com/',
+    'https://evilbandcamp.com/',
+    # Empty
+    '',
+])
+def test_is_allowed_video_url_rejects_disallowed(url):
+    assert audio_mod._is_allowed_video_url(url) is False
+
+
+def test_download_youtube_audio_rejects_non_video_url(tmp_path):
+    """download_youtube_audio must return an error for disallowed URLs without
+    making any network request."""
+    path, err = audio_mod.download_youtube_audio(
+        'http://169.254.169.254/latest/meta-data/', str(tmp_path)
+    )
+    assert path is None
+    assert err is not None
+    assert 'supported video host' in err.lower()
+
+
 def test_get_audio_duration_missing_file():
     """get_audio_duration should return None for non-existent files."""
     result = audio_mod.get_audio_duration('/nonexistent/file.mp3')
