@@ -314,6 +314,22 @@ async function fprUseCover(releaseGroupId) {
     }
 }
 
+// Returns { offset, error }: offset is the manual seconds value as a string
+// ('' when auto-detect applies or no mode needs it), error is a message to
+// show the caller when the user picked manual but didn't enter a valid
+// number. Split out of fprBuild to keep that function's branch count down.
+function fprCollectManualOffset(audioMode) {
+    if (audioMode !== 'sync' && audioMode !== 'existing_pack') return { offset: '', error: null };
+    const syncMethodInput = document.querySelector('input[name="fpr-sync-method"]:checked');
+    const syncMethod = syncMethodInput ? syncMethodInput.value : 'auto';
+    if (syncMethod !== 'manual') return { offset: '', error: null };
+    const raw = (document.getElementById('fpr-manual-offset')?.value || '').trim();
+    if (raw === '' || Number.isNaN(Number(raw))) {
+        return { offset: '', error: 'Enter a numeric manual offset in seconds, or switch back to auto-detect.' };
+    }
+    return { offset: raw, error: null };
+}
+
 function fprUpdateSyncMethodUI() {
     const selected = document.querySelector('input[name="fpr-sync-method"]:checked');
     const method = selected ? selected.value : 'auto';
@@ -443,7 +459,7 @@ function fprCollectTracks() {
     return { tracks: indices.join(','), names: names.join(','), notation: notation.join(',') };
 }
 
-async function fprBuild() {
+function fprBuild() {
     if (!_uploadId) return;
     const { tracks, names, notation } = fprCollectTracks();
     if (!tracks) {
@@ -478,18 +494,10 @@ async function fprBuild() {
         return;
     }
 
-    let manualOffset = '';
-    if (audioMode === 'sync' || audioMode === 'existing_pack') {
-        const syncMethodInput = document.querySelector('input[name="fpr-sync-method"]:checked');
-        const syncMethod = syncMethodInput ? syncMethodInput.value : 'auto';
-        if (syncMethod === 'manual') {
-            const raw = (document.getElementById('fpr-manual-offset')?.value || '').trim();
-            if (raw === '' || Number.isNaN(Number(raw))) {
-                alert('Enter a numeric manual offset in seconds, or switch back to auto-detect.');
-                return;
-            }
-            manualOffset = raw;
-        }
+    const { offset: manualOffset, error: manualOffsetError } = fprCollectManualOffset(audioMode);
+    if (manualOffsetError) {
+        alert(manualOffsetError);
+        return;
     }
 
     document.getElementById('fpr-parsed').classList.add('hidden');
