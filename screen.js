@@ -88,6 +88,10 @@ setTimeout(() => {
     for (const radio of document.querySelectorAll('input[name="fpr-audio-mode"]')) {
         radio.addEventListener('change', fprUpdateAudioModeUI);
     }
+
+    for (const radio of document.querySelectorAll('input[name="fpr-sync-method"]')) {
+        radio.addEventListener('change', fprUpdateSyncMethodUI);
+    }
 }, 100);
 
 // ── File handling ─────────────────────────────────────────────────────────
@@ -310,6 +314,13 @@ async function fprUseCover(releaseGroupId) {
     }
 }
 
+function fprUpdateSyncMethodUI() {
+    const selected = document.querySelector('input[name="fpr-sync-method"]:checked');
+    const method = selected ? selected.value : 'auto';
+    const row = document.getElementById('fpr-manual-offset-row');
+    if (row) row.classList.toggle('hidden', method !== 'manual');
+}
+
 function fprUpdateAudioModeUI() {
     const selected = document.querySelector('input[name="fpr-audio-mode"]:checked');
     const mode = selected ? selected.value : 'midi';
@@ -317,6 +328,10 @@ function fprUpdateAudioModeUI() {
     if (syncControls) syncControls.classList.toggle('hidden', mode !== 'sync');
     const existingPackControls = document.getElementById('fpr-existing-pack-controls');
     if (existingPackControls) existingPackControls.classList.toggle('hidden', mode !== 'existing_pack');
+    const syncMethodControls = document.getElementById('fpr-sync-method-controls');
+    if (syncMethodControls) {
+        syncMethodControls.classList.toggle('hidden', mode !== 'sync' && mode !== 'existing_pack');
+    }
 
     // Grey out (rather than hide) modes the uploaded file can't support,
     // so the UI explains itself instead of options silently vanishing.
@@ -379,7 +394,12 @@ function fprShowParsed(data) {
         `input[name="fpr-audio-mode"][value="${_format === 'gpif' ? (_hasEmbeddedAudio ? 'embedded' : 'sync') : 'midi'}"]`
     );
     if (defaultMode) defaultMode.checked = true;
+    const autoMethodRadio = document.querySelector('input[name="fpr-sync-method"][value="auto"]');
+    if (autoMethodRadio) autoMethodRadio.checked = true;
+    const manualOffsetInput = document.getElementById('fpr-manual-offset');
+    if (manualOffsetInput) manualOffsetInput.value = '';
     fprUpdateAudioModeUI();
+    fprUpdateSyncMethodUI();
 
     _tracks = data.tracks || [];
     const container = document.getElementById('fpr-tracks');
@@ -458,6 +478,20 @@ async function fprBuild() {
         return;
     }
 
+    let manualOffset = '';
+    if (audioMode === 'sync' || audioMode === 'existing_pack') {
+        const syncMethodInput = document.querySelector('input[name="fpr-sync-method"]:checked');
+        const syncMethod = syncMethodInput ? syncMethodInput.value : 'auto';
+        if (syncMethod === 'manual') {
+            const raw = (document.getElementById('fpr-manual-offset')?.value || '').trim();
+            if (raw === '' || Number.isNaN(Number(raw))) {
+                alert('Enter a numeric manual offset in seconds, or switch back to auto-detect.');
+                return;
+            }
+            manualOffset = raw;
+        }
+    }
+
     document.getElementById('fpr-parsed').classList.add('hidden');
     document.getElementById('fpr-progress').classList.remove('hidden');
     document.getElementById('fpr-result').classList.add('hidden');
@@ -472,6 +506,7 @@ async function fprBuild() {
         notation_tracks: _format === 'gpif' ? notation : 'default',
         combine_same_name: combineSameName,
         audio_mode: audioMode,
+        manual_offset: manualOffset,
     });
     const ws = new WebSocket(`${WS_BASE}/build?${params}`);
 

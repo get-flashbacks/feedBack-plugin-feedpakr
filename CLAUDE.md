@@ -29,61 +29,92 @@ thread via `run_in_executor`, streamed to the client over
   `_do_build()` inside `ws_build` is a plain function handed to
   `run_in_executor`, not awaited inline.
 
-## Audio/chart sync — how it works and its known gap
+## Audio/chart sync — flat offset vs. tempo-aware warp, and manual override
 
-`build_feedpak` resolves audio (and a single scalar `audio_offset`) via
-`_resolve_audio()` **before** calling `gp2rs.convert_file(...,
-audio_offset=audio_offset)` (`feedpakr_pipeline.py` around line 725, with
-a comment explaining why the ordering matters). `convert_file` adds that
-one offset to every note/beat/section/anchor time uniformly (see
-`gp2rs.py`/`gp2rs_gpx.py` — every `RsBeat`/`RsSection`/note timestamp gets
-`+ audio_offset`). There is no separate manifest-level offset field
-anywhere in this pipeline — an offset computed in `_resolve_audio` has
-nowhere else to go, so it must be baked into the XML before
-`song_mod.parse_arrangement`/`song_mod.load_song` read it back. **This
-"resolve-then-convert" ordering was itself a bug fix** (commit `2f77b03`,
-2026-07-31) — before it, the offset was computed after `convert_file` and
-silently discarded for `embedded`/`sync` modes. `existing_pack` mode
-(added later, `e6e2e7b`) was built on top of the already-fixed ordering,
-so it does not have that particular bug.
+`build_feedpak` resolves audio via `_resolve_audio()` **before** calling
+`gp2rs.convert_file(...)` — an offset computed in `_resolve_audio` has
+nowhere else to go (no manifest-level offset field exists anywhere in this
+pipeline), so it must be baked into the XML before `song_mod.parse_arrangement`
+/`song_mod.load_song` read it back. **This "resolve-then-convert" ordering
+was itself a bug fix** (commit `2f77b03`, 2026-07-31) — before it, the
+offset was computed after `convert_file` and silently discarded for
+`embedded`/`sync` modes. `existing_pack` mode (`e6e2e7b`) was built on top
+of the already-fixed ordering.
 
-**The gap that's still there:** for `audio_mode in {'sync',
-'existing_pack'}`, the offset comes from `feedpakr_audio.autosync_audio()`
-→ core's `gp_autosync.auto_sync()` (chroma-CQT + DTW against the tab's
-synthesized pitch content, refined with an onset phase sweep — see
-`lib/gp_autosync.py` in the host repo). `auto_sync()` returns **both** a
-scalar `audio_offset` (bar-1 alignment) **and** a full list of per-bar
-`sync_points` sampled along the DTW path — the latter is exactly what
-`gp_autosync.build_warp_anchors()` / `warp_time()` / `warp_song_times()`
-exist to consume, turning it into a piecewise-linear score-time →
-audio-time mapping so the chart follows the recording's actual tempo
-bar-by-bar (the module docstring literally says: *"Applying only the
-scalar audio_offset (bar 1) assumes the recording holds the authored
-tempo for the whole song — any drift accumulates"*).
+`_resolve_audio()` returns **three** values now: `(audio_path, offset,
+sync_points)`. For `audio_mode in {'sync', 'existing_pack'}` it either:
+- runs `feedpakr_audio.autosync_audio()` (chroma-CQT + DTW against the
+  tab's synthesized pitch content, refined with an onset phase sweep — see
+  `lib/gp_autosync.py` in the host repo), which returns both a scalar
+  `audio_offset` (bar-1 alignment) **and** a list of per-bar `sync_points`
+  sampled along the DTW path, or
+- if the caller passed `manual_offset` (a plain float, seconds — see
+  below), skips autosync entirely and uses that number as `offset` with
+  `sync_points = []`.
 
-`feedpakr_audio.autosync_audio()` throws the `sync_points` away —
-`feedpakr_pipeline.py` binds the return as `offset, _points, err =
-audio_mod.autosync_audio(...)` in **both** the `'sync'` (line ~615) and
-`'existing_pack'` (line ~632) branches of `_resolve_audio`. Only the
-scalar `audio_offset` is used, applied uniformly via `convert_file`. So:
-whenever the real audio's tempo doesn't track the GP file's authored
-tempo map exactly — a live recording, a human performance, any take with
-natural rubato — the chart and audio start in sync at bar 1 and drift
-apart as the song progresses, worst near the end. This is the most likely
-explanation if you're chasing an "arrangements are unsynchronized from
-the audio" report for GP re-imports (`'existing_pack'` mode is
-specifically the path that re-fits a *previously recorded* pack's audio,
-where tempo mismatch is common). The `/autosync-preview` UI route
-(`routes.py`) does return `sync_points` to the frontend, but only for
-display in the preview — the actual `ws_build` path never sees them.
+**Tempo-aware warp, not just a flat offset.** A single scalar offset only
+holds the chart in sync at bar 1 — the module docstring on
+`gp_autosync.py` says it outright: *"Applying only the scalar audio_offset
+(bar 1) assumes the recording holds the authored tempo for the whole song
+— any drift accumulates."* This used to be exactly what happened: the
+per-bar `sync_points` from `auto_sync()` were computed and then discarded
+(`offset, _points, err = audio_mod.autosync_audio(...)`), so any real
+recording whose tempo didn't track the GP file's authored tempo map
+exactly (a live take, natural rubato) would drift out of sync as the song
+progressed. Fixed: `build_feedpak` now calls `_build_warp_fn(gp_path,
+sync_points, warnings)`, which turns `sync_points` into a piecewise-linear
+score-time → audio-time mapping via `gp_autosync.build_warp_anchors()` +
+`warp_time()` (falls back to `None` — the old flat-offset behavior — when
+there are fewer than 2 usable anchors, `gp_autosync` isn't importable, or
+`sync_points` is empty because manual/non-autosync mode was used). When a
+`warp_fn` is available:
+- `convert_file(..., audio_offset=0.0)` — chart is written as-written, no
+  flat shift baked in;
+- each arrangement's parsed `Arrangement` (`arr`) is warped in place via
+  `_warp_arrangement(arr, warp_fn)` (wraps `gp_autosync.warp_song_times`
+  with a throwaway single-arrangement `Song`) **before**
+  `arrangement_to_wire(arr)` — covers notes/chords/anchors/hand_shapes/phrases;
+  `_gpif_drumtab_from_wire` inherits correct hit times for free since it
+  reads the already-warped `wire`;
+- `song_meta` (the `Song` used for `song_timeline`/`duration`) is warped
+  the same way right after `_load_song_meta`, before `_song_timeline_from_meta`
+  and before `duration` is read — lyrics/keys extraction, which take
+  `song_timeline['beats']` as an input, inherit correct timing for free
+  since they run after this;
+- the GP3-5 **native** drum-tab path (`gp2rs.convert_drum_track_to_drumtab`)
+  doesn't go through `convert_file`/`arr` at all, so its hits are warped
+  by a manual per-hit loop after the call. **This call was also missing
+  `audio_offset` entirely before this fix** — a real, standalone bug (every
+  other arrangement got the flat sync shift, GP3-5 native drum arrangements
+  got none) — now it gets either the flat offset or 0.0+per-hit-warp,
+  matching every other arrangement type.
+- the duration sanity-check's `aligned_duration` no longer double-adds
+  `audio_offset` when `warp_fn` is active, since `song_meta.song_length`
+  is already expressed in audio-time after the warp.
 
-A real fix would parse arrangements/song timeline with `audio_offset=0`,
-then call `gp_autosync.warp_song_times(song, warp_fn)` — where
-`warp_fn = lambda t: gp_autosync.warp_time(t, anchors)` and `anchors =
-gp_autosync.build_warp_anchors(sync_points, gp_autosync.bar_start_times(gp_path))`
-— on the parsed `Song`/`Arrangement` objects before re-serializing to
-wire format, instead of baking a flat offset into the XML up front. Not
-done yet; flagging here so it isn't re-discovered from scratch.
+**Deliberately out of scope:** `wire['tones']` (tone-change markers) are
+extracted straight from `gp_song`/`gp_path`/`xml_path` by
+`feedpakr_tones.py` with no offset parameter at all, for *both* GP3-5 and
+GPIF — they've never been offset-corrected by this pipeline, warp or no
+warp. Left alone here rather than scope-creeped in; a real fix needs
+`feedpakr_tones.py`'s extractors to accept an offset/warp themselves.
+Notation (`feedpakr_notation.py`) reads straight from `gp_path` too and is
+similarly never offset-corrected — same story, separate pre-existing gap.
+
+`result['features']['tempo_aware_sync']` reports whether the warp was
+actually used for a given build (`False` for manual offset, non-autosync
+modes, or a degraded/failed autosync run) — useful for tests/diagnostics
+without re-deriving it from `warnings` text matching.
+
+**Manual sync override.** `build_feedpak(..., manual_offset: float | None)`
+plumbs through from `routes.py`'s `ws_build` (`manual_offset: str = ''`
+query param, parsed to float or rejected with an error) and from the UI
+(`screen.html`'s `#fpr-sync-method-controls` radio pair + `#fpr-manual-offset`
+number input, shown whenever `audio_mode` is `sync`/`existing_pack`; collected
+in `screen.js`'s `fprBuild()`). Use it when autosync's DTW alignment picks
+the wrong spot — it bypasses autosync (and therefore the warp) entirely
+and applies the given number of seconds as a flat shift, the same way the
+pre-fix code always worked.
 
 Separately, `gp_autosync.gp_has_expandable_repeats()` exists (checks for
 repeat brackets/voltas/D.S./D.C. in a GP3/4/5 file — files where
@@ -95,7 +126,7 @@ for their own (different) repeat-expansion limitation
 (`_gpif_has_repeat_markup` → the "repeats/alternate endings... GP6/7/8
 import does not yet expand" warning in `build_feedpak`); GP3-5 has no
 analogous warning even though the underlying function to detect the
-condition already exists.
+condition already exists. Still open — not addressed by this fix.
 
 ## feedpak-spec compliance (see got-feedBack/feedpak-spec)
 

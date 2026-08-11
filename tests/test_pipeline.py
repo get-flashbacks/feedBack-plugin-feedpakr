@@ -228,7 +228,7 @@ def test_build_feedpak_feeds_resolved_audio_offset_into_convert_file(monkeypatch
     audio_path.write_bytes(b'OggS')
     monkeypatch.setattr(
         pipeline, '_resolve_audio',
-        lambda *a, **k: (str(audio_path), 1.75),
+        lambda *a, **k: (str(audio_path), 1.75, []),
     )
     monkeypatch.setattr(pipeline.audio_mod, 'get_audio_duration', lambda _path: None)
 
@@ -255,7 +255,7 @@ def test_build_feedpak_feeds_resolved_audio_offset_into_convert_file(monkeypatch
 def test_build_feedpak_rejects_failed_requested_audio(monkeypatch):
     monkeypatch.setattr(
         pipeline, '_resolve_audio',
-        lambda *a, **k: (None, 0.0),
+        lambda *a, **k: (None, 0.0, []),
     )
     with pytest.raises(RuntimeError, match='Audio could not be produced'):
         pipeline.build_feedpak(
@@ -294,7 +294,7 @@ def test_build_feedpak_existing_pack_mode_keeps_original_stems_and_cover(tmp_pat
     # Autosync itself (chroma-DTW/librosa) is exercised by feedpakr_audio's
     # own tests — stub _resolve_audio here so this test stays about the
     # existing_pack plumbing (extra stems + cover fallback), not autosync.
-    monkeypatch.setattr(pipeline, '_resolve_audio', lambda *a, **k: (None, 0.0))
+    monkeypatch.setattr(pipeline, '_resolve_audio', lambda *a, **k: (None, 0.0, []))
 
     result = pipeline.build_feedpak(
         str(MONEY_GP5),
@@ -334,7 +334,7 @@ def test_build_feedpak_existing_pack_sanitizes_stem_ids_for_archive_paths(tmp_pa
         'cover_path': None,
         'sync_reference_path': str(unsafe_path),
     }
-    monkeypatch.setattr(pipeline, '_resolve_audio', lambda *a, **k: (None, 0.0))
+    monkeypatch.setattr(pipeline, '_resolve_audio', lambda *a, **k: (None, 0.0, []))
 
     result = pipeline.build_feedpak(
         str(MONEY_GP5),
@@ -368,7 +368,7 @@ def test_build_feedpak_existing_pack_mode_with_full_mix_no_extra_stems(tmp_path,
         'cover_path': None,
         'sync_reference_path': str(full_path),
     }
-    monkeypatch.setattr(pipeline, '_resolve_audio', lambda *a, **k: (str(full_path), 0.0))
+    monkeypatch.setattr(pipeline, '_resolve_audio', lambda *a, **k: (str(full_path), 0.0, []))
     monkeypatch.setattr(pipeline.audio_mod, 'get_audio_duration', lambda _path: None)
 
     result = pipeline.build_feedpak(
@@ -587,7 +587,7 @@ def test_build_feedpak_gpif_notation_selection_can_disable_keys_default():
 def test_build_feedpak_reports_only_recorded_audio_as_split_eligible(tmp_path, monkeypatch):
     audio_path = tmp_path / 'recording.ogg'
     audio_path.write_bytes(b'OggS')
-    monkeypatch.setattr(pipeline, '_resolve_audio', lambda *a, **k: (str(audio_path), 0.0))
+    monkeypatch.setattr(pipeline, '_resolve_audio', lambda *a, **k: (str(audio_path), 0.0, []))
     monkeypatch.setattr(pipeline.audio_mod, 'get_audio_duration', lambda _path: None)
     result = pipeline.build_feedpak(
         str(MONEY_GP5),
