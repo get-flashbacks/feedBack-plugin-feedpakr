@@ -817,6 +817,26 @@ def build_feedpak(
         # or too few points) means every audio_offset use below falls back
         # to the pre-existing flat-shift behavior.
         warp_fn = _build_warp_fn(gp_path, sync_points, warnings)
+        # bar_start_times()/auto_sync() anchor the warp on the AS-WRITTEN
+        # score (each repeated bar sampled once); convert_file's default
+        # expand_repeats=True instead walks the playback graph and emits an
+        # AS-PERFORMED timeline (repeats/voltas/D.S./D.C. played out in
+        # full). A warp built from the former mis-maps every repeat pass
+        # past the first — later passes fall outside the anchor range and
+        # get extrapolated with the last segment's slope, which is
+        # typically worse than the flat bar-1 offset these files got
+        # before per-bar warping existed. GPIF's own repeat handling is
+        # already as-written on both sides (gp_has_expandable_repeats()
+        # always False there — see its docstring), so this only applies to
+        # GP3-5. Fall back to the flat offset and say why, rather than
+        # silently mis-syncing every repeated section.
+        if warp_fn is not None and not is_gpif and gp_autosync.gp_has_expandable_repeats(gp_path):
+            warp_fn = None
+            warnings.append(
+                'Tempo-aware sync disabled: this file uses repeats/alternate endings, whose '
+                'as-performed timing (after the first pass) can\'t be reliably mapped from the '
+                'as-written alignment autosync produced — using a constant offset instead.'
+            )
         # 'existing_pack' with only separated stems and no 'full' mixdown
         # legitimately returns audio_path=None from _resolve_audio — the
         # real audio lives in existing_pack['stems'], packed further down.
@@ -880,9 +900,25 @@ def build_feedpak(
             if lyrics_mod.is_vocals_xml(xml_path):
                 try:
                     entries = lyrics_mod.parse_vocals_xml(xml_path)
+                    pitch = lyrics_mod.parse_vocal_pitch_xml(xml_path)
+                    if warp_fn is not None:
+                        # Unlike the fretted-track loop below, this reads
+                        # timing straight from xml_path — which convert_file
+                        # wrote at audio_offset=0.0 when warp_fn is active
+                        # (see the convert_file call above) — so it needs
+                        # its own warp pass; nothing upstream corrects it.
+                        for entry in entries:
+                            end = warp_fn(entry['t'] + entry['d'])
+                            entry['t'] = round(warp_fn(entry['t']), 3)
+                            entry['d'] = round(max(0.0, end - entry['t']), 3)
+                        if pitch:
+                            for note in pitch.get('notes', []):
+                                end = warp_fn(note['t'] + note['d'])
+                                note['t'] = round(warp_fn(note['t']), 3)
+                                note['d'] = round(max(0.0, end - note['t']), 3)
                     if entries:
                         lyrics_entries = entries
-                    vocal_pitch_data = lyrics_mod.parse_vocal_pitch_xml(xml_path)
+                    vocal_pitch_data = pitch
                 except Exception as e:
                     warnings.append(f'Lyrics extraction failed for a vocal track: {e}')
                 continue

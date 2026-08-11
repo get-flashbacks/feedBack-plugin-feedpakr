@@ -57,7 +57,7 @@ holds the chart in sync at bar 1 — the module docstring on
 `gp_autosync.py` says it outright: *"Applying only the scalar audio_offset
 (bar 1) assumes the recording holds the authored tempo for the whole song
 — any drift accumulates."* This used to be exactly what happened: the
-per-bar `sync_points` from `auto_sync()` were computed and then discarded
+per-bar `sync_points` from `autosync_audio()` were computed and then discarded
 (`offset, _points, err = audio_mod.autosync_audio(...)`), so any real
 recording whose tempo didn't track the GP file's authored tempo map
 exactly (a live take, natural rubato) would drift out of sync as the song
@@ -78,9 +78,19 @@ there are fewer than 2 usable anchors, `gp_autosync` isn't importable, or
   reads the already-warped `wire`;
 - `song_meta` (the `Song` used for `song_timeline`/`duration`) is warped
   the same way right after `_load_song_meta`, before `_song_timeline_from_meta`
-  and before `duration` is read — lyrics/keys extraction, which take
+  and before `duration` is read — GP3-5's `extract_gp345_lyrics()` and
+  `extract_gpif_keys()`/`extract_gp345_keys()`, which take
   `song_timeline['beats']` as an input, inherit correct timing for free
   since they run after this;
+- GPIF's `<vocals>` XML path is the one exception that does **not** inherit
+  timing for free: it's read straight off `xml_path` in the
+  `is_vocals_xml()` branch (`parse_vocals_xml`/`parse_vocal_pitch_xml`),
+  which `continue`s before reaching the fretted-track warp code below — so
+  it gets its own explicit per-entry warp pass right there (`t` and `d`,
+  end-start like every other duration field) when `warp_fn` is active.
+  Missing this was a real regression caught in review (PR #45): GPIF
+  vocal timing would have silently kept reading as-written XML while every
+  other arrangement type in the same build was warped;
 - the GP3-5 **native** drum-tab path (`gp2rs.convert_drum_track_to_drumtab`)
   doesn't go through `convert_file`/`arr` at all, so its hits are warped
   by a manual per-hit loop after the call. **This call was also missing
@@ -114,19 +124,32 @@ number input, shown whenever `audio_mode` is `sync`/`existing_pack`; collected
 in `screen.js`'s `fprBuild()`). Use it when autosync's DTW alignment picks
 the wrong spot — it bypasses autosync (and therefore the warp) entirely
 and applies the given number of seconds as a flat shift, the same way the
-pre-fix code always worked.
+pre-fix code always worked. Both ends validate it's actually a *finite*
+number — `float()` happily parses `'inf'`/`'Infinity'`/`'nan'`/`'1e999'`,
+so `routes.py`'s `ws_build` checks `math.isfinite()` (not just a bare
+`try/except ValueError`) and `screen.js` uses `Number.isFinite`, not
+`!Number.isNaN`, in `fprCollectManualOffset` — a non-finite offset would
+otherwise flow straight into the chart as a literal `Infinity`/`NaN`
+timestamp and produce a spec-invalid pack.
 
-Separately, `gp_autosync.gp_has_expandable_repeats()` exists (checks for
-repeat brackets/voltas/D.S./D.C. in a GP3/4/5 file — files where
-`convert_file`'s as-performed, repeat-expanded output diverges from the
-as-written score `auto_sync` aligns against) but **nothing calls it** —
-not `feedpakr_pipeline.py`, not `gp_autosync.py` itself outside its own
-definition. GPIF (GP6/7/8) imports already surface an equivalent warning
-for their own (different) repeat-expansion limitation
-(`_gpif_has_repeat_markup` → the "repeats/alternate endings... GP6/7/8
-import does not yet expand" warning in `build_feedpak`); GP3-5 has no
-analogous warning even though the underlying function to detect the
-condition already exists. Still open — not addressed by this fix.
+**GP3-5 repeats vs. the warp: gated, not silently wrong.**
+`gp_autosync.gp_has_expandable_repeats()` (checks for repeat
+brackets/voltas/D.S./D.C. in a GP3/4/5 file) exists specifically because
+`bar_start_times()`/`auto_sync()` anchor the warp on the **as-written**
+score (each repeated bar sampled once), while `convert_file`'s default
+`expand_repeats=True` emits an **as-performed** timeline (repeats played
+out in full) — a warp built from the former mis-maps every repeat pass
+past the first (later passes fall outside the anchor range and get
+extrapolated with the last segment's slope). `build_feedpak` now calls it
+right after building `warp_fn`: if the file has expandable repeats (GP3-5
+only — GPIF's own repeat handling is as-written on both sides, so
+`gp_has_expandable_repeats()` is hardcoded `False` there), the warp is
+discarded in favor of the flat offset these files always got, with a
+warning explaining why — falling back to a known-safe behavior instead of
+a warp that's likely wrong for everything after the first repeat. GPIF's
+*different* repeat limitation (`_gpif_has_repeat_markup` → the
+"repeats/alternate endings... GP6/7/8 import does not yet expand" warning)
+is unrelated and unaffected by this.
 
 ## feedpak-spec compliance (see got-feedBack/feedpak-spec)
 

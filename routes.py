@@ -83,6 +83,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import re
 import secrets
 import shutil
@@ -589,8 +590,13 @@ def setup(app, context):
             try:
                 manual_offset_val = float(manual_offset)
             except ValueError:
+                manual_offset_val = None
+            # float() also accepts 'inf'/'Infinity'/'nan' — reject those
+            # too, not just unparseable strings, or a bogus offset flows
+            # into the chart as a literal Infinity/NaN timestamp.
+            if manual_offset_val is None or not math.isfinite(manual_offset_val):
                 await websocket.send_json({
-                    'error': f'manual_offset must be a number of seconds, got {manual_offset!r}'
+                    'error': f'manual_offset must be a finite number of seconds, got {manual_offset!r}'
                 })
                 await websocket.close()
                 return

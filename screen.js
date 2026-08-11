@@ -324,7 +324,7 @@ function fprCollectManualOffset(audioMode) {
     const syncMethod = syncMethodInput ? syncMethodInput.value : 'auto';
     if (syncMethod !== 'manual') return { offset: '', error: null };
     const raw = (document.getElementById('fpr-manual-offset')?.value || '').trim();
-    if (raw === '' || Number.isNaN(Number(raw))) {
+    if (raw === '' || !Number.isFinite(Number(raw))) {
         return { offset: '', error: 'Enter a numeric manual offset in seconds, or switch back to auto-detect.' };
     }
     return { offset: raw, error: null };
