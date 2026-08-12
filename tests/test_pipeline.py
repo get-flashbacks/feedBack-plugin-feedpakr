@@ -5,6 +5,7 @@ folder. Both self-skip cleanly when unavailable rather than false-failing
 in an environment that only has this one repo checked out.
 """
 
+import types
 from pathlib import Path
 
 import pytest
@@ -771,7 +772,15 @@ def test_build_feedpak_gpif_vocals_warped_when_tempo_aware_sync_active(monkeypat
     branch continues before reaching the fretted-track warp code, so
     without its own warp pass GPIF lyrics/vocal-pitch would silently keep
     as-written (unwarped) timestamps while every other arrangement in the
-    same build was corrected."""
+    same build was corrected.
+
+    Asserts against an independently-computed expected value (ground truth
+    taken from the actual as-written XML, warped with a warp function built
+    the same way _build_warp_fn does) rather than a loose tolerance band —
+    an earlier version of this test used a tolerance wide enough that an
+    un-warped first syllable could pass it too (pullfrog PR #45 follow-up
+    review), so it wouldn't actually have failed if the warp pass were
+    removed. This one would."""
     audio_path = tmp_path / 'audio.ogg'
     audio_path.write_bytes(b'OggS')
     monkeypatch.setattr(pipeline.audio_mod, 'get_audio_duration', lambda _path: None)
@@ -787,19 +796,51 @@ def test_build_feedpak_gpif_vocals_warped_when_tempo_aware_sync_active(monkeypat
         {'bar': 0, 'time_secs': synth_time(0), 'modified_bpm': 120.0},
         {'bar': last_bar, 'time_secs': synth_time(last_bar), 'modified_bpm': 120.0},
     ]
+
+    parsed = pipeline.parse_gp(str(MONEY_GP8))
+    vocal_indices = [t['index'] for t in parsed['tracks'] if t['is_vocal']]
+    assert vocal_indices, 'fixture has no vocal track to exercise this regression against'
+    arrangement_names = {vocal_indices[0]: 'Vocals'}
+
+    # Ground truth: convert the vocal track independently at audio_offset=0.0
+    # (exactly what build_feedpak does internally once warp_fn is active) and
+    # read the LAST syllable's as-written raw time straight off the XML —
+    # the value the pipeline's own vocals-warp loop is responsible for
+    # warping. Using the last (not first) syllable matters: with only two
+    # anchor points, a syllable near bar 0 warps to nearly the same place
+    # whether or not the warp actually ran, so only a late syllable — where
+    # the 1.2x stretch has accumulated real drift — can tell the two apart.
+    raw_xml_paths = pipeline.gp2rs.convert_file(
+        str(MONEY_GP8), str(tmp_path / 'raw_xml'),
+        track_indices=vocal_indices, arrangement_names=arrangement_names,
+        audio_offset=0.0,
+    )
+    vocals_xml = next((p for p in raw_xml_paths if pipeline.lyrics_mod.is_vocals_xml(p)), None)
+    assert vocals_xml is not None, 'fixture vocal track did not produce a <vocals> XML'
+    raw_entries = pipeline.lyrics_mod.parse_vocals_xml(vocals_xml)
+    assert raw_entries, 'fixture vocal track has no lyric syllables to test against'
+    raw_last_t = raw_entries[-1]['t']
+
+    anchors = pipeline.gp_autosync.build_warp_anchors(
+        [types.SimpleNamespace(bar=p['bar'], time_secs=p['time_secs']) for p in sync_points],
+        bar_starts,
+    )
+    assert anchors, 'crafted sync_points did not produce usable warp anchors'
+    expected_last_t = pipeline.gp_autosync.warp_time(raw_last_t, anchors)
+    assert abs(expected_last_t - raw_last_t) > 0.5, (
+        'fixture vocal track has no late-song syllable to distinguish warped '
+        'from un-warped output against — pick a track/fixture with more spread'
+    )
+
     monkeypatch.setattr(
         pipeline, '_resolve_audio',
         lambda *a, **k: (str(audio_path), synth_time(0), sync_points),
     )
 
-    parsed = pipeline.parse_gp(str(MONEY_GP8))
-    vocal_indices = [t['index'] for t in parsed['tracks'] if t['is_vocal']]
-    assert vocal_indices, 'fixture has no vocal track to exercise this regression against'
-
     result = pipeline.build_feedpak(
         str(MONEY_GP8),
         track_indices=vocal_indices,
-        arrangement_names={vocal_indices[0]: 'Vocals'},
+        arrangement_names=arrangement_names,
         audio_mode='sync',
         user_audio_path=str(audio_path),
         report=lambda stage, pct: None,
@@ -812,10 +853,7 @@ def test_build_feedpak_gpif_vocals_warped_when_tempo_aware_sync_active(monkeypat
     with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
         lyrics = json.loads(zf.read('lyrics.json'))
     assert lyrics
-    # As-written, the first syllable would land at whatever raw score-time
-    # gp2rs_gpx assigned it — after the warp it must be near synth_time(0)
-    # (the bar-0 anchor), not near 0.0.
-    assert lyrics[0]['t'] == pytest.approx(synth_time(0), abs=0.5)
+    assert lyrics[-1]['t'] == pytest.approx(expected_last_t, abs=0.05)
 
 
 @fixture_available
