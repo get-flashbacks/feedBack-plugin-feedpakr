@@ -673,7 +673,10 @@ def test_build_feedpak_tempo_aware_warp_differs_from_flat_offset(monkeypatch, tm
         import io, zipfile, json
         with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
             manifest = yaml.safe_load(zf.read('manifest.yaml'))
-            arr_file = next(a['file'] for a in manifest['arrangements'] if a['name'] == 'Bass')
+            arr_file = next(
+                (a['file'] for a in manifest['arrangements'] if a['name'] == 'Bass'), None,
+            )
+            assert arr_file is not None, 'build produced no "Bass" arrangement'
             wire = json.loads(zf.read(arr_file))
         return sorted(
             [n['t'] for n in wire.get('notes', [])] + [c['t'] for c in wire.get('chords', [])]
