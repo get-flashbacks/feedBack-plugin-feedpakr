@@ -267,6 +267,112 @@ def test_build_feedpak_rejects_failed_requested_audio(monkeypatch):
         )
 
 
+# ── Tempo-aware warp (_build_warp_fn / _warp_arrangement) ──────────────────
+#
+# These don't need the MONEY_GP5 fixture (unlike almost everything else in
+# this file) — bar_start_times/build_warp_anchors/warp_time/
+# gp_has_expandable_repeats are librosa-free and pure/gp_path-driven, so
+# stubbing pipeline.gp_autosync.bar_start_times keeps them fixture-free and
+# runnable wherever the host lib is on sys.path (HOST_AVAILABLE), i.e. in CI.
+
+GP_AUTOSYNC_AVAILABLE = pipeline.gp_autosync is not None
+autosync_available = pytest.mark.skipif(
+    not GP_AUTOSYNC_AVAILABLE, reason='gp_autosync not on sys.path'
+)
+
+
+@autosync_available
+def test_build_warp_fn_builds_a_working_piecewise_warp(monkeypatch):
+    """Happy path: enough sync points produce a real warp_fn, no warnings."""
+    monkeypatch.setattr(
+        pipeline.gp_autosync, 'bar_start_times',
+        lambda gp_path: [0.0, 2.0, 4.0, 6.0, 8.0, 10.0],
+    )
+    sync_points = [
+        {'bar': 0, 'time_secs': 0.5, 'modified_bpm': 120.0},
+        {'bar': 3, 'time_secs': 7.0, 'modified_bpm': 120.0},
+        {'bar': 5, 'time_secs': 11.5, 'modified_bpm': 118.0},
+    ]
+    warnings: list[str] = []
+
+    warp_fn = pipeline._build_warp_fn('fake.gp5', sync_points, warnings)
+
+    assert warp_fn is not None
+    assert warnings == []
+    # Anchors land exactly on the sampled points; between/around them the
+    # mapping should be monotonically increasing (a real warp, not a no-op).
+    assert warp_fn(0.0) == pytest.approx(0.5)
+    assert warp_fn(6.0) == pytest.approx(7.0)
+    assert warp_fn(10.0) == pytest.approx(11.5)
+    assert warp_fn(0.0) < warp_fn(6.0) < warp_fn(10.0)
+
+
+@autosync_available
+def test_build_warp_fn_degrades_to_none_with_too_few_anchors(monkeypatch):
+    """A single sync point can't build a >=2-point anchor list — falls back
+    to the flat offset (None) with an explanatory warning, not an error."""
+    monkeypatch.setattr(
+        pipeline.gp_autosync, 'bar_start_times',
+        lambda gp_path: [0.0, 2.0, 4.0],
+    )
+    warnings: list[str] = []
+
+    warp_fn = pipeline._build_warp_fn('fake.gp5', [{'bar': 0, 'time_secs': 0.5}], warnings)
+
+    assert warp_fn is None
+    assert len(warnings) == 1
+    assert 'constant offset' in warnings[0]
+
+
+@autosync_available
+def test_build_warp_fn_degrades_to_none_on_bar_start_times_failure(monkeypatch):
+    """bar_start_times raising (unparseable gp_path, etc.) must degrade to
+    the flat offset, not propagate — this runs inside a best-effort stage
+    of build_feedpak."""
+    def _boom(gp_path):
+        raise ValueError('cannot parse')
+    monkeypatch.setattr(pipeline.gp_autosync, 'bar_start_times', _boom)
+    warnings: list[str] = []
+
+    warp_fn = pipeline._build_warp_fn('fake.gp5', [{'bar': 0, 'time_secs': 0.5}], warnings)
+
+    assert warp_fn is None
+    assert len(warnings) == 1
+    assert 'cannot parse' in warnings[0]
+
+
+def test_build_warp_fn_silent_none_with_no_sync_points():
+    """Manual offset / non-autosync modes pass sync_points=[] — that's the
+    expected 'no warp available' case, not a degraded one, so no warning
+    should be emitted (would otherwise spam every non-autosync build)."""
+    warnings: list[str] = []
+    assert pipeline._build_warp_fn('fake.gp5', [], warnings) is None
+    assert warnings == []
+
+
+@pytest.mark.skipif(pipeline.song_mod is None, reason='song module not on sys.path')
+@autosync_available
+def test_warp_arrangement_shifts_notes_and_anchors_preserving_duration():
+    song_mod = pipeline.song_mod
+    arr = song_mod.Arrangement(name='Test')
+    held_note = song_mod.Note(time=0.0, string=0, fret=0, sustain=2.0)
+    plain_note = song_mod.Note(time=8.0, string=1, fret=2, sustain=0.0)
+    anchor = song_mod.Anchor(time=4.0, fret=1, width=4)
+    arr.notes = [held_note, plain_note]
+    arr.anchors = [anchor]
+
+    def warp(t):
+        return t * 2.0 + 1.0  # distinguishable affine warp
+
+    pipeline._warp_arrangement(arr, warp)
+
+    assert held_note.time == pytest.approx(1.0)          # warp(0.0)
+    assert held_note.sustain == pytest.approx(4.0)        # warp(2.0) - warp(0.0)
+    assert plain_note.time == pytest.approx(17.0)         # warp(8.0)
+    assert plain_note.sustain == pytest.approx(0.0)
+    assert anchor.time == pytest.approx(9.0)              # warp(4.0)
+
+
 # ── GPIF (.gp / .gpx, GP6/7/8) ────────────────────────────────────────────
 
 @fixture_available
@@ -497,6 +603,216 @@ def test_build_feedpak_gp345_drums_become_type_drums_arrangement():
 
     assert drum_tab['hits']  # real hit data, not empty
     assert drum_tab['kit']
+
+
+# ── Tempo-aware warp, manual offset, repeat gate: end-to-end ───────────────
+# Needs MONEY_GP5 (real guitarpro.parse + gp2rs.convert_file), unlike the
+# fixture-free _build_warp_fn/_warp_arrangement tests above.
+
+@fixture_available
+def test_build_feedpak_tempo_aware_warp_differs_from_flat_offset(monkeypatch, tmp_path):
+    """A genuine multi-point (tempo-stretched) sync_points list must produce
+    output that's actually warped per-bar, not just a relabeled flat shift.
+    Compares two builds of the same file: one with 3 sync points describing
+    a 15% tempo stretch, one with just the first of those points (forcing
+    the pre-existing flat-offset fallback since _build_warp_fn needs >=2).
+    Both are anchored at the same bar-0 offset, so the builds should agree
+    near the start and diverge by the end — that divergence is the whole
+    point of this feature."""
+    audio_path = tmp_path / 'audio.ogg'
+    audio_path.write_bytes(b'OggS')
+    monkeypatch.setattr(pipeline.audio_mod, 'get_audio_duration', lambda _path: None)
+
+    bar_starts = pipeline.gp_autosync.bar_start_times(str(MONEY_GP5))
+    assert len(bar_starts) >= 6, 'fixture too short to sample a spread of bars for this test'
+    last_bar = len(bar_starts) - 1
+
+    def synth_time(bar):
+        return bar_starts[bar] * 1.15 + 0.3
+
+    full_points = [
+        {'bar': 0, 'time_secs': synth_time(0), 'modified_bpm': 120.0},
+        {'bar': last_bar // 2, 'time_secs': synth_time(last_bar // 2), 'modified_bpm': 120.0},
+        {'bar': last_bar, 'time_secs': synth_time(last_bar), 'modified_bpm': 120.0},
+    ]
+
+    real_convert_file = pipeline.gp2rs.convert_file
+    captured_offsets = []
+
+    def _spy_convert_file(*args, **kwargs):
+        captured_offsets.append(kwargs.get('audio_offset'))
+        return real_convert_file(*args, **kwargs)
+
+    def _build(sync_points):
+        monkeypatch.setattr(
+            pipeline, '_resolve_audio',
+            lambda *a, **k: (str(audio_path), synth_time(0), sync_points),
+        )
+        monkeypatch.setattr(pipeline.gp2rs, 'convert_file', _spy_convert_file)
+        return pipeline.build_feedpak(
+            str(MONEY_GP5),
+            track_indices=[3],
+            arrangement_names={3: 'Bass'},
+            audio_mode='sync',
+            user_audio_path=str(audio_path),
+            report=lambda stage, pct: None,
+        )
+
+    warped = _build(full_points)
+    flat = _build([full_points[0]])  # 1 point -> _build_warp_fn degrades to None
+
+    assert warped['features']['tempo_aware_sync'] is True
+    assert flat['features']['tempo_aware_sync'] is False
+    # convert_file got 0.0 for the warped build (correction applied to the
+    # parsed Arrangement/Song afterward instead), and the real scalar for
+    # the flat-fallback build.
+    assert captured_offsets[0] == 0.0
+    assert captured_offsets[1] == pytest.approx(synth_time(0))
+
+    def _note_and_chord_times(result):
+        import io, zipfile, json
+        with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
+            manifest = yaml.safe_load(zf.read('manifest.yaml'))
+            arr_file = next(a['file'] for a in manifest['arrangements'] if a['name'] == 'Bass')
+            wire = json.loads(zf.read(arr_file))
+        return sorted(
+            [n['t'] for n in wire.get('notes', [])] + [c['t'] for c in wire.get('chords', [])]
+        )
+
+    warped_times = _note_and_chord_times(warped)
+    flat_times = _note_and_chord_times(flat)
+    assert warped_times and flat_times
+
+    # Both anchor at bar 0, so the earliest events should be close...
+    assert warped_times[0] == pytest.approx(flat_times[0], abs=0.05)
+    # ...but a real 15% tempo stretch across the whole song must diverge
+    # from a flat shift by more than rounding noise by the end.
+    assert abs(warped_times[-1] - flat_times[-1]) > 0.05
+
+
+@fixture_available
+def test_build_feedpak_manual_offset_bypasses_autosync(monkeypatch, tmp_path):
+    """manual_offset must skip autosync entirely (even though nothing here
+    would make it fail) and disable tempo-aware sync, using the given flat
+    offset instead — the opt-out for when autosync gets it wrong."""
+    audio_path = tmp_path / 'audio.ogg'
+    audio_path.write_bytes(b'OggS')
+    monkeypatch.setattr(pipeline.audio_mod, 'get_audio_duration', lambda _path: None)
+
+    def _autosync_should_not_run(*args, **kwargs):
+        raise AssertionError('autosync_audio must not run when manual_offset is set')
+    monkeypatch.setattr(pipeline.audio_mod, 'autosync_audio', _autosync_should_not_run)
+
+    real_convert_file = pipeline.gp2rs.convert_file
+    captured = {}
+
+    def _spy_convert_file(*args, **kwargs):
+        captured['audio_offset'] = kwargs.get('audio_offset')
+        return real_convert_file(*args, **kwargs)
+    monkeypatch.setattr(pipeline.gp2rs, 'convert_file', _spy_convert_file)
+
+    result = pipeline.build_feedpak(
+        str(MONEY_GP5),
+        track_indices=[3],
+        arrangement_names={3: 'Bass'},
+        audio_mode='sync',
+        user_audio_path=str(audio_path),
+        manual_offset=2.5,
+        report=lambda stage, pct: None,
+    )
+
+    assert result['features']['tempo_aware_sync'] is False
+    assert captured['audio_offset'] == 2.5
+    assert not any('Autosync' in w for w in result['warnings'])
+
+
+@fixture_available
+def test_build_feedpak_gp345_repeats_disable_warp(monkeypatch, tmp_path):
+    """A GP3-5 file with expandable repeats must not get the per-bar warp
+    (auto_sync's anchors are as-written; convert_file's default
+    expand_repeats=True is as-performed — mixing them mis-maps every repeat
+    pass past the first) even when autosync produced enough sync points to
+    otherwise build one. Falls back to the flat offset with a warning."""
+    audio_path = tmp_path / 'audio.ogg'
+    audio_path.write_bytes(b'OggS')
+    monkeypatch.setattr(pipeline.audio_mod, 'get_audio_duration', lambda _path: None)
+    monkeypatch.setattr(pipeline.gp_autosync, 'gp_has_expandable_repeats', lambda gp_path: True)
+
+    sync_points = [
+        {'bar': 0, 'time_secs': 0.3, 'modified_bpm': 120.0},
+        {'bar': 4, 'time_secs': 8.0, 'modified_bpm': 120.0},
+    ]
+    monkeypatch.setattr(
+        pipeline, '_resolve_audio',
+        lambda *a, **k: (str(audio_path), 0.3, sync_points),
+    )
+
+    result = pipeline.build_feedpak(
+        str(MONEY_GP5),
+        track_indices=[3],
+        arrangement_names={3: 'Bass'},
+        audio_mode='sync',
+        user_audio_path=str(audio_path),
+        report=lambda stage, pct: None,
+    )
+
+    assert result['features']['tempo_aware_sync'] is False
+    assert any('repeats' in w and 'Tempo-aware sync disabled' in w for w in result['warnings'])
+
+
+@gp8_fixture_available
+def test_build_feedpak_gpif_vocals_warped_when_tempo_aware_sync_active(monkeypatch, tmp_path):
+    """Regression test (pullfrog PR #45 review): the is_vocals_xml branch
+    reads lyrics/vocal-pitch timing straight off xml_path, which
+    convert_file writes at audio_offset=0.0 when a warp is active — that
+    branch continues before reaching the fretted-track warp code, so
+    without its own warp pass GPIF lyrics/vocal-pitch would silently keep
+    as-written (unwarped) timestamps while every other arrangement in the
+    same build was corrected."""
+    audio_path = tmp_path / 'audio.ogg'
+    audio_path.write_bytes(b'OggS')
+    monkeypatch.setattr(pipeline.audio_mod, 'get_audio_duration', lambda _path: None)
+
+    bar_starts = pipeline.gp_autosync.bar_start_times(str(MONEY_GP8))
+    assert len(bar_starts) >= 4, 'fixture too short to sample a spread of bars for this test'
+    last_bar = len(bar_starts) - 1
+
+    def synth_time(bar):
+        return bar_starts[bar] * 1.2 + 0.5  # a real stretch, not just an offset
+
+    sync_points = [
+        {'bar': 0, 'time_secs': synth_time(0), 'modified_bpm': 120.0},
+        {'bar': last_bar, 'time_secs': synth_time(last_bar), 'modified_bpm': 120.0},
+    ]
+    monkeypatch.setattr(
+        pipeline, '_resolve_audio',
+        lambda *a, **k: (str(audio_path), synth_time(0), sync_points),
+    )
+
+    parsed = pipeline.parse_gp(str(MONEY_GP8))
+    vocal_indices = [t['index'] for t in parsed['tracks'] if t['is_vocal']]
+    assert vocal_indices, 'fixture has no vocal track to exercise this regression against'
+
+    result = pipeline.build_feedpak(
+        str(MONEY_GP8),
+        track_indices=vocal_indices,
+        arrangement_names={vocal_indices[0]: 'Vocals'},
+        audio_mode='sync',
+        user_audio_path=str(audio_path),
+        report=lambda stage, pct: None,
+    )
+
+    assert result['features']['tempo_aware_sync'] is True
+    assert result['features']['lyrics'] is True
+
+    import io, zipfile, json
+    with zipfile.ZipFile(io.BytesIO(result['bytes'])) as zf:
+        lyrics = json.loads(zf.read('lyrics.json'))
+    assert lyrics
+    # As-written, the first syllable would land at whatever raw score-time
+    # gp2rs_gpx assigned it — after the warp it must be near synth_time(0)
+    # (the bar-0 anchor), not near 0.0.
+    assert lyrics[0]['t'] == pytest.approx(synth_time(0), abs=0.5)
 
 
 @fixture_available
