@@ -1,4 +1,6 @@
 # Auto-assign configuration for kentaro-m/auto-assign-action
-# Assignee-only: the action filters the PR author out of reviewer candidates,
-# and every PR here is authored by carochacs, so a reviewer list never fires.
+addReviewers: true
 addAssignees: author
+reviewers:
+  - carochacs
+numberOfReviewers: 0
