@@ -3,3 +3,7 @@ __pycache__/
 .pytest_cache/
 _scratch*/
 *.code-workspace
+
+
+#Ignore vscode AI rules
+.github\instructions\codacy.instructions.md
