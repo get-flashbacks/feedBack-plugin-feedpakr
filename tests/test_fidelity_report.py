@@ -3,9 +3,23 @@ import json
 import zipfile
 import xml.etree.ElementTree as ET
 
+import pytest
 import yaml
 
 import compare_gp_to_feedpak as fidelity
+
+# Only the GPIF test below reaches into the host's gp2rs_gpx module; the other
+# two tests in this file are self-contained. Without the sibling feedBack
+# checkout, pipeline.gp2rs_gpx is None and monkeypatching an attribute on it
+# raises AttributeError instead of skipping — which contradicted conftest's
+# "tests that need it will self-skip" contract and made a plugin-only checkout
+# look broken. Same idiom as test_pipeline.py's HOST_AVAILABLE gate, applied
+# per-test rather than as a module-wide pytestmark so the other two keep
+# running standalone.
+host_required = pytest.mark.skipif(
+    fidelity.pipeline.gp2rs_gpx is None,
+    reason='feedBack host core lib not on sys.path',
+)
 
 
 def _pack_bytes():
@@ -60,6 +74,7 @@ def test_compare_distinguishes_missing_absent_and_skipped_audio():
     assert rows['embedded_audio']['status'] == 'skipped'
 
 
+@host_required
 def test_gpif_source_counts_played_chords_and_ignores_zero_capo(monkeypatch):
     root = ET.fromstring('''
         <GPIF>
