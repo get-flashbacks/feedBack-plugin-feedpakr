@@ -180,6 +180,29 @@
                 </div>
                 <div id="fpr-existing-pack-status" class="text-xs text-gray-500"></div>
             </div>
+
+            <div id="fpr-sync-method-controls" class="hidden pl-6 border-l border-gray-800 mt-3">
+                <p class="text-xs text-gray-500 mb-2">Sync method</p>
+                <div class="flex flex-col gap-1.5">
+                    <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none">
+                        <input type="radio" name="fpr-sync-method" value="auto" checked class="accent-blue-500">
+                        Auto-detect alignment (chroma/DTW, tempo-aware)
+                    </label>
+                    <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none">
+                        <input type="radio" name="fpr-sync-method" value="manual" class="accent-blue-500">
+                        Enter offset manually
+                    </label>
+                </div>
+                <div id="fpr-manual-offset-row" class="hidden flex items-center gap-2 mt-2">
+                    <input type="number" id="fpr-manual-offset" step="0.01" placeholder="0.000"
+                        class="w-28 bg-dark-600 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 outline-none focus:border-accent/50">
+                    <span class="text-xs text-gray-600">seconds — positive delays the chart, negative advances it</span>
+                </div>
+                <p class="text-xs text-gray-600 mt-1">
+                    Use manual entry if auto-detect picks the wrong alignment; it applies a
+                    fixed offset instead of the tempo-aware auto-detect result.
+                </p>
+            </div>
         </div>
         <div class="bg-dark-700 border border-gray-800 rounded-xl p-5 mb-4">
             <p class="text-xs text-gray-400 mb-3">Cover art (optional)</p>

@@ -83,6 +83,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import re
 import secrets
 import shutil
@@ -549,6 +550,7 @@ def setup(app, context):
         notation_tracks: str = 'default',
         combine_same_name: bool = False,
         audio_mode: str = 'midi',
+        manual_offset: str = '',
     ):
         """Build a .feedpak from the uploaded GP file, stream progress.
 
@@ -569,6 +571,11 @@ def setup(app, context):
                 "existing_pack" (reuse an existing .sloppak/.feedpak's
                 audio/stems/cover, aligned via autosync — needs
                 upload-existing-pack to have been called first), or "none".
+        manual_offset: optional, "sync"/"existing_pack" only — a plain
+                seconds value (may be negative) that skips autosync and
+                pins the chart-to-audio offset to this number instead, for
+                when the automatic alignment gets it wrong. Empty string
+                (default) means "auto-detect via autosync".
         """
         await websocket.accept()
 
@@ -577,6 +584,22 @@ def setup(app, context):
             await websocket.send_json({'error': f'Invalid audio_mode: {audio_mode!r}'})
             await websocket.close()
             return
+
+        manual_offset_val: float | None = None
+        if manual_offset.strip():
+            try:
+                manual_offset_val = float(manual_offset)
+            except ValueError:
+                manual_offset_val = None
+            # float() also accepts 'inf'/'Infinity'/'nan' — reject those
+            # too, not just unparseable strings, or a bogus offset flows
+            # into the chart as a literal Infinity/NaN timestamp.
+            if manual_offset_val is None or not math.isfinite(manual_offset_val):
+                await websocket.send_json({
+                    'error': f'manual_offset must be a finite number of seconds, got {manual_offset!r}'
+                })
+                await websocket.close()
+                return
 
         try:
             track_indices = [int(x) for x in tracks.split(',') if x.strip() != '']
@@ -705,6 +728,7 @@ def setup(app, context):
                     audio_mode=audio_mode,
                     user_audio_path=user_audio_path,
                     existing_pack=existing_pack,
+                    manual_offset=manual_offset_val,
                     cover_path=cover_path,
                     report=_report,
                 )
