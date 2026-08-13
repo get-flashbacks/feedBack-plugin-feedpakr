@@ -31,6 +31,7 @@ import tempfile
 import zipfile
 import zlib
 from pathlib import Path
+from types import SimpleNamespace
 
 try:
     import guitarpro
@@ -46,6 +47,11 @@ try:
     import gp2rs_gpx
 except ImportError:  # pragma: no cover
     gp2rs_gpx = None
+
+try:
+    import gp_autosync
+except ImportError:  # pragma: no cover
+    gp_autosync = None
 
 try:
     import song as song_mod
@@ -578,67 +584,126 @@ def _resolve_audio(
     warnings: list[str],
     report,
     existing_pack: dict | None = None,
-) -> tuple[str | None, float]:
-    """Returns (audio_path, offset). audio_path is None on any failure —
-    callers treat that as the §5.3.2 authoring-intermediate carve-out, not
-    a hard error.
+    manual_offset: float | None = None,
+) -> tuple[str | None, float, list[dict]]:
+    """Returns (audio_path, offset, sync_points). audio_path is None on any
+    failure — callers treat that as the §5.3.2 authoring-intermediate
+    carve-out, not a hard error.
 
     For audio_mode == 'existing_pack', audio_path is the source pack's
     'full' mixdown when it has one (None if it only has separated stems —
     those are packed separately by the caller via existing_pack['stems'],
-    not through this return value)."""
+    not through this return value).
+
+    sync_points is the per-bar DTW alignment gp_autosync produced (empty
+    unless audio_mode is 'sync'/'existing_pack', autosync actually ran, and
+    it succeeded) — build_feedpak turns these into a piecewise time-warp so
+    the chart follows the recording's tempo instead of one constant offset.
+    manual_offset, when not None, bypasses autosync entirely for 'sync' and
+    'existing_pack' modes and uses the given value as a flat offset (no
+    warp, since a single manually-entered number carries no per-bar data) —
+    for when autosync gets the alignment wrong and the user wants to pin it
+    by ear/eye instead."""
     if audio_mode == 'none':
         report('Audio skipped (unchecked).', 15)
-        return None, 0.0
+        return None, 0.0, []
 
     if audio_mode == 'midi':
         if _is_gpif(gp_path):
             warnings.append('Audio skipped: MIDI synthesis needs pyguitarpro, which cannot read GP6/7/8 files.')
-            return None, 0.0
+            return None, 0.0, []
         audio_base = str(tmp_dir / 'audio')
         path, offset, err = audio_mod.synth_midi_audio(gp_path, track_indices, audio_base)
         if err:
             warnings.append(f'Audio skipped: {err}')
-        return path, offset
+        return path, offset, []
 
     if audio_mode == 'embedded':
         path, offset, err = audio_mod.extract_embedded_audio(gp_path, str(tmp_dir))
         if err:
             warnings.append(f'Audio skipped: {err}')
-        return path, offset
+        return path, offset, []
 
     if audio_mode == 'sync':
         if not user_audio_path or not Path(user_audio_path).exists():
             warnings.append('Audio skipped: no audio file was attached.')
-            return None, 0.0
-        report('Aligning audio to the chart…', 15)
-        offset, _points, err = audio_mod.autosync_audio(gp_path, user_audio_path)
-        if err:
-            warnings.append(f'Autosync failed ({err}) — using the attached audio with a zero offset.')
-            offset = 0.0
+            return None, 0.0, []
+        if manual_offset is not None:
+            report('Using manual sync offset…', 15)
+            offset, sync_points = manual_offset, []
+        else:
+            report('Aligning audio to the chart…', 15)
+            offset, sync_points, err = audio_mod.autosync_audio(gp_path, user_audio_path)
+            if err:
+                warnings.append(f'Autosync failed ({err}) — using the attached audio with a zero offset.')
+                offset, sync_points = 0.0, []
         normalized, terr = audio_mod.transcode_to_ogg(
             user_audio_path, str(tmp_dir / 'audio.ogg'),
         )
         if terr:
             warnings.append(f'Audio skipped: {terr}')
-            return None, 0.0
-        return normalized, offset
+            return None, 0.0, []
+        return normalized, offset, sync_points
 
     if audio_mode == 'existing_pack':
         if not existing_pack or not existing_pack.get('sync_reference_path'):
             warnings.append('Audio skipped: no existing pack was attached.')
-            return None, 0.0
-        report('Aligning audio to the chart…', 15)
-        offset, _points, err = audio_mod.autosync_audio(
-            gp_path, existing_pack['sync_reference_path'],
-        )
-        if err:
-            warnings.append(f'Autosync failed ({err}) — using the existing pack\'s audio with a zero offset.')
-            offset = 0.0
-        return existing_pack.get('full_mix_path'), offset
+            return None, 0.0, []
+        if manual_offset is not None:
+            report('Using manual sync offset…', 15)
+            offset, sync_points = manual_offset, []
+        else:
+            report('Aligning audio to the chart…', 15)
+            offset, sync_points, err = audio_mod.autosync_audio(
+                gp_path, existing_pack['sync_reference_path'],
+            )
+            if err:
+                warnings.append(f'Autosync failed ({err}) — using the existing pack\'s audio with a zero offset.')
+                offset, sync_points = 0.0, []
+        return existing_pack.get('full_mix_path'), offset, sync_points
 
     warnings.append(f'Audio skipped: unknown audio mode {audio_mode!r}.')
-    return None, 0.0
+    return None, 0.0, []
+
+
+def _build_warp_fn(gp_path: str, sync_points: list[dict], warnings: list[str]):
+    """Turn autosync's per-bar sync points into a piecewise score-time ->
+    audio-time warp function, so chart timing follows the recording's
+    actual tempo instead of a single constant offset (which only holds bar
+    1 in sync — drift from there accumulates over the song, worse the
+    longer the song runs). Returns None (callers fall back to the flat
+    scalar offset, exactly like before this existed) when there are no
+    sync points (manual offset, non-autosync mode, or autosync failed),
+    gp_autosync isn't importable, or the points don't span enough bars to
+    build a reliable >=2-point anchor list."""
+    if not sync_points or gp_autosync is None:
+        return None
+    try:
+        bar_starts = gp_autosync.bar_start_times(gp_path)
+        sync_point_objs = [
+            SimpleNamespace(bar=p['bar'], time_secs=p['time_secs']) for p in sync_points
+        ]
+        anchors = gp_autosync.build_warp_anchors(sync_point_objs, bar_starts)
+    except Exception as e:
+        warnings.append(f'Tempo-aware sync unavailable ({e}) — using a constant offset instead.')
+        return None
+    if not anchors:
+        warnings.append(
+            'Tempo-aware sync unavailable (not enough reliable alignment points) — '
+            'using a constant offset instead.'
+        )
+        return None
+    return lambda t: gp_autosync.warp_time(t, anchors)
+
+
+def _warp_arrangement(arr, warp_fn) -> None:
+    """Apply a score-time -> audio-time warp to one already-parsed
+    Arrangement in place. Reuses gp_autosync.warp_song_times (which warps
+    notes/chords/anchors/hand_shapes/phrases/tones/tempos on song.arrangements)
+    via a throwaway single-arrangement Song wrapper — only .arrangements is
+    read for this call, so leaving beats/sections/song_length at their
+    dataclass defaults is fine."""
+    gp_autosync.warp_song_times(song_mod.Song(arrangements=[arr]), warp_fn)
 
 
 # ── Main pipeline ────────────────────────────────────────────────────────
@@ -665,6 +730,7 @@ def build_feedpak(
     audio_mode: str = 'midi',
     user_audio_path: str | None = None,
     existing_pack: dict | None = None,
+    manual_offset: float | None = None,
     cover_path: str | None = None,
     report=lambda stage, pct: None,
 ) -> dict:
@@ -687,6 +753,13 @@ def build_feedpak(
     while reusing a previously-uploaded pack's audio/stems/cover
     byte-for-byte, re-aligned to the new chart via autosync. When
     cover_path isn't separately supplied, existing_pack's cover is used.
+
+    manual_offset (audio_mode in {'sync', 'existing_pack'} only): when
+    given, skips autosync entirely and shifts the chart by this many
+    seconds instead — for when the DTW alignment gets it wrong and the
+    user wants to pin the offset by ear. Since it's a single number it
+    gets applied as a flat offset only (no drift correction, unlike a
+    successful autosync run — see _build_warp_fn).
     """
     _require_core()
     _check_extension(gp_path)
@@ -733,10 +806,37 @@ def build_feedpak(
         # autosync offset were both silently discarded, leaving the chart
         # and audio measurably out of alignment whenever either wasn't 0.
         report('Generating audio…', 10)
-        audio_path, audio_offset = _resolve_audio(
+        audio_path, audio_offset, sync_points = _resolve_audio(
             gp_path, track_indices, audio_mode, user_audio_path, tmp_dir, warnings, report,
-            existing_pack=existing_pack,
+            existing_pack=existing_pack, manual_offset=manual_offset,
         )
+        # A successful autosync run carries per-bar alignment data beyond
+        # the single scalar audio_offset — turn it into a piecewise warp so
+        # the chart tracks the recording's actual tempo instead of only
+        # matching it at bar 1 and drifting from there. None (unavailable
+        # or too few points) means every audio_offset use below falls back
+        # to the pre-existing flat-shift behavior.
+        warp_fn = _build_warp_fn(gp_path, sync_points, warnings)
+        # bar_start_times()/auto_sync() anchor the warp on the AS-WRITTEN
+        # score (each repeated bar sampled once); convert_file's default
+        # expand_repeats=True instead walks the playback graph and emits an
+        # AS-PERFORMED timeline (repeats/voltas/D.S./D.C. played out in
+        # full). A warp built from the former mis-maps every repeat pass
+        # past the first — later passes fall outside the anchor range and
+        # get extrapolated with the last segment's slope, which is
+        # typically worse than the flat bar-1 offset these files got
+        # before per-bar warping existed. GPIF's own repeat handling is
+        # already as-written on both sides (gp_has_expandable_repeats()
+        # always False there — see its docstring), so this only applies to
+        # GP3-5. Fall back to the flat offset and say why, rather than
+        # silently mis-syncing every repeated section.
+        if warp_fn is not None and not is_gpif and gp_autosync.gp_has_expandable_repeats(gp_path):
+            warp_fn = None
+            warnings.append(
+                'Tempo-aware sync disabled: this file uses repeats/alternate endings, whose '
+                'as-performed timing (after the first pass) can\'t be reliably mapped from the '
+                'as-written alignment autosync produced — using a constant offset instead.'
+            )
         # 'existing_pack' with only separated stems and no 'full' mixdown
         # legitimately returns audio_path=None from _resolve_audio — the
         # real audio lives in existing_pack['stems'], packed further down.
@@ -755,7 +855,10 @@ def build_feedpak(
             gp_path, str(xml_dir),
             track_indices=track_indices,
             arrangement_names=names,
-            audio_offset=audio_offset,
+            # When warp_fn is set, notes/beats/sections are written
+            # as-written here and corrected per-bar further down instead —
+            # baking the flat audio_offset in now would double-shift them.
+            audio_offset=(0.0 if warp_fn is not None else audio_offset),
         )
         if not xml_paths:
             raise RuntimeError('No arrangements produced from the selected tracks.')
@@ -797,9 +900,25 @@ def build_feedpak(
             if lyrics_mod.is_vocals_xml(xml_path):
                 try:
                     entries = lyrics_mod.parse_vocals_xml(xml_path)
+                    pitch = lyrics_mod.parse_vocal_pitch_xml(xml_path)
+                    if warp_fn is not None:
+                        # Unlike the fretted-track loop below, this reads
+                        # timing straight from xml_path — which convert_file
+                        # wrote at audio_offset=0.0 when warp_fn is active
+                        # (see the convert_file call above) — so it needs
+                        # its own warp pass; nothing upstream corrects it.
+                        for entry in entries:
+                            end = warp_fn(entry['t'] + entry['d'])
+                            entry['t'] = round(warp_fn(entry['t']), 3)
+                            entry['d'] = round(max(0.0, end - entry['t']), 3)
+                        if pitch:
+                            for note in pitch.get('notes', []):
+                                end = warp_fn(note['t'] + note['d'])
+                                note['t'] = round(warp_fn(note['t']), 3)
+                                note['d'] = round(max(0.0, end - note['t']), 3)
                     if entries:
                         lyrics_entries = entries
-                    vocal_pitch_data = lyrics_mod.parse_vocal_pitch_xml(xml_path)
+                    vocal_pitch_data = pitch
                 except Exception as e:
                     warnings.append(f'Lyrics extraction failed for a vocal track: {e}')
                 continue
@@ -807,9 +926,20 @@ def build_feedpak(
             if idx is not None and idx in drum_indices and not is_gpif:
                 try:
                     drum_name = names.get(idx) or 'Drums'
+                    # audio_offset was previously omitted here entirely (bug:
+                    # every other arrangement got the sync shift via
+                    # convert_file, GP3-5 native drum tracks got none) — pass
+                    # it explicitly, or 0.0 + a post-hoc warp when warp_fn is
+                    # active (this path doesn't go through convert_file, so
+                    # it can't receive the warp any other way).
                     drum_tab = gp2rs.convert_drum_track_to_drumtab(
-                        gp_song, idx, arrangement_name=drum_name,
+                        gp_song, idx,
+                        audio_offset=(0.0 if warp_fn is not None else audio_offset),
+                        arrangement_name=drum_name,
                     )
+                    if warp_fn is not None:
+                        for hit in drum_tab.get('hits', []):
+                            hit['t'] = round(warp_fn(hit['t']), 3)
                     arr_id = pack.arrangement_id_for(drum_tab.get('name') or drum_name, taken_ids)
                     dt_filename = f'drum_tab_{arr_id}.json'
                     drum_tab_files[dt_filename] = drum_tab
@@ -843,6 +973,9 @@ def build_feedpak(
             # (gp2rs hardcodes <capo>0</capo>) — override with the real value.
             if idx is not None:
                 arr.capo = gpif_capo.get(idx, 0) if is_gpif else _capo_for_track(gp_song, idx)
+
+            if warp_fn is not None:
+                _warp_arrangement(arr, warp_fn)
 
             wire = song_mod.arrangement_to_wire(arr)
 
@@ -980,6 +1113,8 @@ def build_feedpak(
 
         report('Building timeline (sections, beats)…', 68)
         song_meta = _load_song_meta(xml_dir)
+        if warp_fn is not None and song_meta is not None:
+            gp_autosync.warp_song_times(song_meta, warp_fn)
         song_timeline = _song_timeline_from_meta(song_meta)
         if song_timeline is None:
             warnings.append('No sections/beats found in the source file.')
@@ -992,8 +1127,11 @@ def build_feedpak(
                 # convert_file shifts chart events by audio_offset, so compare
                 # the audio endpoint with the aligned chart endpoint rather
                 # than the unshifted source duration. This avoids flagging a
-                # legitimate recording lead-in as the wrong song.
-                aligned_duration = max(0.0, duration + audio_offset)
+                # legitimate recording lead-in as the wrong song. When warp_fn
+                # is active, `duration` (song_meta.song_length) was already
+                # mapped through the warp above — it's already expressed in
+                # audio-time, so adding audio_offset again would double-count.
+                aligned_duration = max(0.0, duration) if warp_fn is not None else max(0.0, duration + audio_offset)
                 drift = abs(audio_duration - aligned_duration)
                 tolerance = max(aligned_duration, duration) * 0.05
                 if drift > tolerance:
@@ -1145,6 +1283,11 @@ def build_feedpak(
                     (audio_path and audio_mode in {'embedded', 'sync', 'existing_pack'})
                     or extra_stems_manifest
                 ),
+                # True when autosync's per-bar alignment was used to
+                # drift-correct the chart (see _build_warp_fn) rather than
+                # only a flat scalar offset. False for manual_offset, non-
+                # autosync audio modes, or a degraded/failed autosync run.
+                'tempo_aware_sync': warp_fn is not None,
                 # The pack already carries the source's separated stems —
                 # offering "Split Stems" on top would try to re-split an
                 # already-separated mix (or find nothing to split, when
