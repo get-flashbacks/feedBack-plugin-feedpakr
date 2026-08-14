@@ -20,5 +20,5 @@ Please indicate whether this PR should be upstreamed to the core repository or i
 ## Checklist
 - [ ] My code follows the style guidelines of this project
 - [ ] I have performed a self-review of my own code
-- [ ] I have commented my code, particularly in hard-to-understand areas
+- [ ] I have not added comments beyond what was asked for
 - [ ] My changes generate no new warnings
