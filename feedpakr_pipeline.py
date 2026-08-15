@@ -370,7 +370,7 @@ def _gpif_played_chord_names(root, track: dict) -> dict[tuple, str]:
     names_by_shape: dict[tuple, str] = {}
 
     for column, pitches in zip(track['stave_columns'], track['stave_pitches'], strict=True):
-        order = sorted(range(len(pitches)), key=lambda i: (pitches[i], i))
+        order = sorted(range(len(pitches)), key=lambda i, pitches=pitches: (pitches[i], i))
         for masterbar in masterbars:
             bar_ids = masterbar.findtext('Bars', '').split()
             if column >= len(bar_ids):
@@ -496,7 +496,7 @@ def _merge_arrangement_wires(base: dict, extra: dict) -> dict:
         base[key].sort(key=lambda item: item.get('t', 0))
     for key, time_key in (('anchors', 'time'), ('handshapes', 'start_time')):
         unique = {json.dumps(item, sort_keys=True): item for item in base.get(key, [])}
-        base[key] = sorted(unique.values(), key=lambda item: item.get(time_key, 0))
+        base[key] = sorted(unique.values(), key=lambda item, time_key=time_key: item.get(time_key, 0))
 
     for phrase in extra.get('phrases', []):
         for level in phrase.get('levels', []):
