@@ -370,7 +370,7 @@ def _gpif_played_chord_names(root, track: dict) -> dict[tuple, str]:
     names_by_shape: dict[tuple, str] = {}
 
     for column, pitches in zip(track['stave_columns'], track['stave_pitches'], strict=True):
-        def key(i: int) -> tuple[int, int]:
+        def key(i: int, pitches=pitches) -> tuple[int, int]:
             return (pitches[i], i)
         order = sorted(range(len(pitches)), key=key)
         for masterbar in masterbars:
