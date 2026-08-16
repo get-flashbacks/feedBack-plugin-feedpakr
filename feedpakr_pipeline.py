@@ -370,7 +370,9 @@ def _gpif_played_chord_names(root, track: dict) -> dict[tuple, str]:
     names_by_shape: dict[tuple, str] = {}
 
     for column, pitches in zip(track['stave_columns'], track['stave_pitches'], strict=True):
-        order = sorted(range(len(pitches)), key=lambda i, pitches=pitches: (pitches[i], i))
+        def key(i: int) -> tuple[int, int]:
+            return (pitches[i], i)
+        order = sorted(range(len(pitches)), key=key)
         for masterbar in masterbars:
             bar_ids = masterbar.findtext('Bars', '').split()
             if column >= len(bar_ids):
@@ -492,11 +494,23 @@ def _merge_arrangement_wires(base: dict, extra: dict) -> dict:
 
     base.setdefault('notes', []).extend(extra.get('notes', []))
     base.setdefault('anchors', []).extend(extra.get('anchors', []))
+
+    def _get_t(item: dict[str, object]) -> object:
+        return item.get('t', 0)
+
+    def _make_time_key_func(time_key: str):
+        def _key_func(item: dict[str, object]) -> object:
+            return item.get(time_key, 0)
+        return _key_func
+
+    def _get_start_time(item: dict[str, object]) -> object:
+        return item.get('start_time', 0)
+
     for key in ('notes', 'chords'):
-        base[key].sort(key=lambda item: item.get('t', 0))
+        base[key].sort(key=_get_t)
     for key, time_key in (('anchors', 'time'), ('handshapes', 'start_time')):
         unique = {json.dumps(item, sort_keys=True): item for item in base.get(key, [])}
-        base[key] = sorted(unique.values(), key=lambda item, time_key=time_key: item.get(time_key, 0))
+        base[key] = sorted(unique.values(), key=_make_time_key_func(time_key))
 
     for phrase in extra.get('phrases', []):
         for level in phrase.get('levels', []):
@@ -517,7 +531,7 @@ def _merge_arrangement_wires(base: dict, extra: dict) -> dict:
             for key in ('notes', 'chords', 'anchors', 'handshapes'):
                 target.setdefault(key, []).extend(level.get(key, []))
     if base.get('phrases'):
-        base['phrases'].sort(key=lambda item: item.get('start_time', 0))
+        base['phrases'].sort(key=_get_start_time)
 
     combined_tempos = base.get('tempos', []) + extra.get('tempos', [])
     if combined_tempos:
