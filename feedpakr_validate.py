@@ -192,14 +192,16 @@ def validate_feedpak_file(path: str | Path) -> dict[str, list[str]]:
             if not isinstance(entry, dict):
                 continue
             rel = entry.get('file')
-            payload = read_json(rel) if isinstance(rel, str) else None
-            if payload is not None:
-                arrangements[rel] = payload
+            if isinstance(rel, str):
+                payload = read_json(rel)
+                if payload is not None:
+                    arrangements[rel] = payload
             for key, dest in (('drum_tab', drum_tabs), ('notation', notations)):
                 side_rel = entry.get(key)
-                side_payload = read_json(side_rel) if isinstance(side_rel, str) else None
-                if side_payload is not None:
-                    dest[side_rel] = side_payload
+                if isinstance(side_rel, str):
+                    side_payload = read_json(side_rel)
+                    if side_payload is not None:
+                        dest[side_rel] = side_payload
 
         def referenced(name: str) -> dict | None:
             rel = manifest.get(name)
