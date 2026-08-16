@@ -369,10 +369,13 @@ def _gpif_played_chord_names(root, track: dict) -> dict[tuple, str]:
     notes = {el.get('id'): el for el in (root.find('Notes') or [])}
     names_by_shape: dict[tuple, str] = {}
 
-    for column, pitches in zip(track['stave_columns'], track['stave_pitches'], strict=True):
-        def key(i: int, pitches=pitches) -> tuple[int, int]:
+    def _make_pitch_key_func(pitches: list[int]):
+        def key(i: int) -> tuple[int, int]:
             return (pitches[i], i)
-        order = sorted(range(len(pitches)), key=key)
+        return key
+
+    for column, pitches in zip(track['stave_columns'], track['stave_pitches'], strict=True):
+        order = sorted(range(len(pitches)), key=_make_pitch_key_func(pitches))
         for masterbar in masterbars:
             bar_ids = masterbar.findtext('Bars', '').split()
             if column >= len(bar_ids):
