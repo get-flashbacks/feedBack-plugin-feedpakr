@@ -1115,11 +1115,13 @@ def build_feedpak(
                 # is rarely used and doesn't apply to non-guitar tracks at
                 # all (gp2rs_gpx never even collects it for keys tracks).
                 if is_gpif and idx is not None:
-                    # Pass the already-loaded gpif_root — see
-                    # extract_gpif_sound_changes' docstring: without it,
-                    # this reloads and re-parses the whole GPIF document
-                    # from disk once per track in this loop.
-                    sound_changes = tones_mod.extract_gpif_sound_changes(gp_path, idx, gpif_root)
+                    # Pass the already-loaded gpif_root/gpif_tracks — see
+                    # extract_gpif_sound_changes' docstring: without them,
+                    # this reloads and re-walks the whole GPIF document
+                    # once per track in this loop.
+                    sound_changes = tones_mod.extract_gpif_sound_changes(
+                        gp_path, idx, gpif_root, gpif_tracks
+                    )
                     if sound_changes:
                         tones = sound_changes
                 if tones:

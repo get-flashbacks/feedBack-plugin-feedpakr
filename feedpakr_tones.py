@@ -148,7 +148,7 @@ def _masterbar_start_times(masterbars, tempo_map, tempo_bpm: float) -> list[floa
     return times
 
 
-def extract_gpif_sound_changes(gp_path: str, track_index: int, root=None) -> dict | None:
+def extract_gpif_sound_changes(gp_path: str, track_index: int, root=None, raw_tracks=None) -> dict | None:
     """GPIF-only — reads a *different* mechanism than parse_tones_xml: a
     track-level `<Automations><Automation><Type>Sound</Type>…` list, which
     swaps the MIDI/RSE instrument a track plays at a given bar (e.g. a keys
@@ -170,13 +170,18 @@ def extract_gpif_sound_changes(gp_path: str, track_index: int, root=None) -> dic
     (build_feedpak) invokes this once per track in its conversion loop, so
     passing the root it already loaded avoids re-parsing the same GPIF file
     from disk on every track. Defaults to None so a standalone caller can
-    still pass just a path."""
+    still pass just a path.
+
+    ``raw_tracks``, when given, is the ``_gpif_tracks(root)`` result the
+    caller already computed — reusing it here avoids re-walking the GPIF
+    document's track list on every track in the same conversion loop."""
     if gp2rs_gpx is None:
         return None
     try:
         if root is None:
             root = gp2rs_gpx._load_gpif(gp_path)
-        raw_tracks = gp2rs_gpx._gpif_tracks(root)
+        if raw_tracks is None:
+            raw_tracks = gp2rs_gpx._gpif_tracks(root)
         if track_index >= len(raw_tracks):
             return None
         track_el = raw_tracks[track_index].get('_el')
