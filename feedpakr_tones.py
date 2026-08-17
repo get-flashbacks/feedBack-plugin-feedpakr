@@ -148,7 +148,7 @@ def _masterbar_start_times(masterbars, tempo_map, tempo_bpm: float) -> list[floa
     return times
 
 
-def extract_gpif_sound_changes(gp_path: str, track_index: int) -> dict | None:
+def extract_gpif_sound_changes(gp_path: str, track_index: int, root=None) -> dict | None:
     """GPIF-only — reads a *different* mechanism than parse_tones_xml: a
     track-level `<Automations><Automation><Type>Sound</Type>…` list, which
     swaps the MIDI/RSE instrument a track plays at a given bar (e.g. a keys
@@ -164,11 +164,18 @@ def extract_gpif_sound_changes(gp_path: str, track_index: int) -> dict | None:
     extract_gp345_tones (feedpak spec §6.9) — no `rig`/`base_rig`, since
     GP's RSE softsynth patches aren't portable rig data (no .sf2 ships with
     the source); a Reader gets the tone-change *names* honestly rather than
-    an invented playable rig."""
+    an invented playable rig.
+
+    ``root``, when given, is an already-parsed GPIF document — the caller
+    (build_feedpak) invokes this once per track in its conversion loop, so
+    passing the root it already loaded avoids re-parsing the same GPIF file
+    from disk on every track. Defaults to None so a standalone caller can
+    still pass just a path."""
     if gp2rs_gpx is None:
         return None
     try:
-        root = gp2rs_gpx._load_gpif(gp_path)
+        if root is None:
+            root = gp2rs_gpx._load_gpif(gp_path)
         raw_tracks = gp2rs_gpx._gpif_tracks(root)
         if track_index >= len(raw_tracks):
             return None

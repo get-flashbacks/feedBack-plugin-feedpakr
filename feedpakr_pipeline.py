@@ -237,15 +237,24 @@ def _capo_for_track(gp_song, track_index: int) -> int:
         return 0
 
 
-def _gpif_capo_lookup(gp_path: str) -> dict[int, int]:
+def _gpif_capo_lookup(gp_path: str, root=None, raw_tracks=None) -> dict[int, int]:
     """Same fix for GPIF sources, whose capo lives at
     Track/Staves/Staff/Properties/Property[@name='CapoFret']/Fret in the
     GPIF XML — gp2rs_gpx doesn't read it either. Returns {track_index: capo}
-    for every track that actually declares a nonzero capo (absent = 0)."""
+    for every track that actually declares a nonzero capo (absent = 0).
+
+    ``root``/``raw_tracks`` let a caller that already has the parsed GPIF
+    document (e.g. build_feedpak, which loads both a couple of lines above
+    its own call here) pass them straight through instead of paying for
+    another full _load_gpif/_gpif_tracks pass over the same file. Both
+    default to None so standalone callers (tests, other pipeline stages)
+    keep working with just a path."""
     result: dict[int, int] = {}
     try:
-        root = gp2rs_gpx._load_gpif(gp_path)
-        raw_tracks = gp2rs_gpx._gpif_tracks(root)
+        if root is None:
+            root = gp2rs_gpx._load_gpif(gp_path)
+        if raw_tracks is None:
+            raw_tracks = gp2rs_gpx._gpif_tracks(root)
         for i, t in enumerate(raw_tracks):
             el = t.get('_el')
             if el is None:
@@ -345,7 +354,25 @@ def _gpif_drumtab_from_wire(wire: dict, arrangement_name: str) -> tuple[dict, di
     }, unmapped)
 
 
-def _gpif_played_chord_names(root, track: dict) -> dict[tuple, str]:
+def _gpif_chord_context(root) -> dict:
+    """Precompute the id-indexed lookup tables _gpif_played_chord_names
+    needs from a GPIF document.
+
+    These tables (MasterBars/Bars/Voices/Beats/Notes) are the same for
+    every track in the file, but _gpif_played_chord_names used to rebuild
+    them from scratch on every call — once per arrangement/track in
+    build_feedpak's conversion loop. Building them once up front turns that
+    from O(tracks * document size) into O(document size + tracks)."""
+    return {
+        'masterbars': list(root.find('MasterBars') or []),
+        'bars': {el.get('id'): el for el in (root.find('Bars') or [])},
+        'voices': {el.get('id'): el for el in (root.find('Voices') or [])},
+        'beats': {el.get('id'): el for el in (root.find('Beats') or [])},
+        'notes': {el.get('id'): el for el in (root.find('Notes') or [])},
+    }
+
+
+def _gpif_played_chord_names(track: dict, ctx: dict) -> dict[tuple, str]:
     """Map played fret shapes to the chord names displayed by Guitar Pro.
 
     GPIF's DiagramCollection is not necessarily a voicing dictionary.  In
@@ -353,6 +380,10 @@ def _gpif_played_chord_names(root, track: dict) -> dict[tuple, str]:
     same placeholder frets; the authoritative association is the beat's
     ``<Chord>item-id</Chord>`` reference.  Rebuild the played shape from that
     beat's notes so it keys exactly like gp2rs_gpx's emitted templates.
+
+    ``ctx`` is the per-document lookup tables from _gpif_chord_context —
+    shared across every call for the same GPIF file (see that function's
+    docstring).
     """
     items = {
         item.get('id'): (item.get('name') or '').strip()
@@ -362,11 +393,11 @@ def _gpif_played_chord_names(root, track: dict) -> dict[tuple, str]:
     if not any(items.values()):
         return {}
 
-    masterbars = list(root.find('MasterBars') or [])
-    bars = {el.get('id'): el for el in (root.find('Bars') or [])}
-    voices = {el.get('id'): el for el in (root.find('Voices') or [])}
-    beats = {el.get('id'): el for el in (root.find('Beats') or [])}
-    notes = {el.get('id'): el for el in (root.find('Notes') or [])}
+    masterbars = ctx['masterbars']
+    bars = ctx['bars']
+    voices = ctx['voices']
+    beats = ctx['beats']
+    notes = ctx['notes']
     names_by_shape: dict[tuple, str] = {}
 
     def _make_pitch_key_func(pitches: list[int]):
@@ -807,7 +838,14 @@ def build_feedpak(
         gp_song = None if is_gpif else guitarpro.parse(gp_path)
         gpif_root = gp2rs_gpx._load_gpif(gp_path) if is_gpif else None
         gpif_tracks = gp2rs_gpx._gpif_tracks(gpif_root) if is_gpif else []
-        gpif_capo = _gpif_capo_lookup(gp_path) if is_gpif else {}
+        # Reuse the gpif_root/gpif_tracks already loaded just above instead
+        # of letting _gpif_capo_lookup re-parse the same GPIF document from
+        # disk (it still accepts a bare path for its other, standalone
+        # callers — see the docstring).
+        gpif_capo = _gpif_capo_lookup(gp_path, gpif_root, gpif_tracks) if is_gpif else {}
+        # Built once per build rather than once per arrangement inside the
+        # conversion loop below — see _gpif_chord_context's docstring.
+        gpif_chord_ctx = _gpif_chord_context(gpif_root) if is_gpif else None
 
         names = {idx: arrangement_names.get(idx, '') for idx in track_indices}
         output_order = _output_track_order(gp_path, track_indices, names)
@@ -998,7 +1036,7 @@ def build_feedpak(
 
             if is_gpif and idx is not None:
                 try:
-                    chord_names = _gpif_played_chord_names(gpif_root, gpif_tracks[idx])
+                    chord_names = _gpif_played_chord_names(gpif_tracks[idx], gpif_chord_ctx)
                     for template in wire.get('templates', []):
                         name = chord_names.get(tuple(template.get('frets', [])))
                         if name:
@@ -1077,7 +1115,11 @@ def build_feedpak(
                 # is rarely used and doesn't apply to non-guitar tracks at
                 # all (gp2rs_gpx never even collects it for keys tracks).
                 if is_gpif and idx is not None:
-                    sound_changes = tones_mod.extract_gpif_sound_changes(gp_path, idx)
+                    # Pass the already-loaded gpif_root — see
+                    # extract_gpif_sound_changes' docstring: without it,
+                    # this reloads and re-parses the whole GPIF document
+                    # from disk once per track in this loop.
+                    sound_changes = tones_mod.extract_gpif_sound_changes(gp_path, idx, gpif_root)
                     if sound_changes:
                         tones = sound_changes
                 if tones:
