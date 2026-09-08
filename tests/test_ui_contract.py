@@ -1,3 +1,4 @@
+import math
 import re
 from pathlib import Path
 
@@ -26,18 +27,20 @@ def test_difficulty_ladder_handoff_uses_current_plugin_endpoint():
 
 
 def _extract_manual_offset_regex_pattern():
-    """Pull the regex literal fprCollectManualOffset validates `raw` against
-    straight out of screen.js, rather than asserting on an exact source
-    string (which broke the first time the pattern was refined to also
-    accept PEP 515 underscore grouping). JS and Python's `re` agree on the
-    syntax this particular pattern uses (anchors, character classes,
-    non-capturing groups, alternation — no lookbehind/named groups), so the
-    extracted source compiles directly as a Python pattern and can be
-    exercised against real inputs instead of eyeballing the string.
+    """Pull FPR_MANUAL_OFFSET_RE's pattern straight out of screen.js, rather
+    than asserting on an exact source string (which broke the first time
+    the pattern was refined to also accept PEP 515 underscore grouping).
+    Keying off the named constant (not a substring of the validation
+    expression) survives any future refactor of how/where it's used. JS and
+    Python's `re` agree on the syntax this particular pattern uses (anchors,
+    character classes, non-capturing groups, alternation — no lookbehind/
+    named groups), so the extracted source compiles directly as a Python
+    pattern and can be exercised against real inputs instead of eyeballing
+    the string.
     """
     script = (ROOT / "screen.js").read_text(encoding="utf-8")
-    m = re.search(r"!(/\^\[\+-\]\?.*?\$/i)\.test\(raw\)", script)
-    assert m, "could not find the manual-offset validation regex in screen.js"
+    m = re.search(r"const FPR_MANUAL_OFFSET_RE = (/\^.*?\$/i);", script)
+    assert m, "could not find FPR_MANUAL_OFFSET_RE in screen.js"
     js_literal = m.group(1)
     assert js_literal.startswith("/") and js_literal.endswith("/i")
     return js_literal[1:-2]  # strip the /.../i delimiters
@@ -86,3 +89,20 @@ def test_manual_offset_client_validation_matches_server_float_grammar():
         assert regex_says_numeric == float_parses, (
             f"{raw!r}: regex says {regex_says_numeric}, float() parses = {float_parses}"
         )
+
+
+def test_manual_offset_finiteness_guard_rejects_regex_shaped_non_finite_values():
+    """Pins the Number.isFinite(Number(raw.replace(...))) arm of the same
+    condition, which the regex test above deliberately doesn't exercise: a
+    value can be grammar-valid (the regex matches) while still not being
+    finite -- "1e999" is exactly this case (PR #45's original finiteness
+    concern). Without this second guard, fprCollectManualOffset would
+    accept "1e999" as a manual offset and forward it to a build that bakes
+    a literal Infinity timestamp into the chart.
+    """
+    script = (ROOT / "screen.js").read_text(encoding="utf-8")
+    assert "!Number.isFinite(Number(raw.replace(/_/g, '')))" in script
+
+    pattern = re.compile(_extract_manual_offset_regex_pattern(), re.IGNORECASE)
+    assert pattern.match("1e999"), "sanity: regex should consider this grammar-valid"
+    assert not math.isfinite(float("1e999")), "sanity: this value is not finite"

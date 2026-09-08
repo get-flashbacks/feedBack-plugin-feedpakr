@@ -314,6 +314,15 @@ async function fprUseCover(releaseGroupId) {
     }
 }
 
+// Plain-decimal grammar Python's float() accepts (what routes.py's ws_build
+// actually parses the manual-offset string with): optional sign, digits
+// (optionally PEP 515 underscore-grouped, e.g. "1_000" -- one digit required
+// on each side of every underscore), optional fraction, optional exponent
+// (also optionally underscore-grouped). Named as its own constant, not
+// inlined into the condition below, so tests can pin the actual grammar
+// instead of pattern-matching a substring of the validation expression.
+const FPR_MANUAL_OFFSET_RE = /^[+-]?(?:\d(?:_?\d)*(?:\.\d(?:_?\d)*)?|\d(?:_?\d)*\.|\.\d(?:_?\d)*)(?:e[+-]?\d(?:_?\d)*)?$/i;
+
 // Returns { offset, error }: offset is the manual seconds value as a string
 // ('' when auto-detect applies or no mode needs it), error is a message to
 // show the caller when the user picked manual but didn't enter a valid
@@ -328,21 +337,19 @@ function fprCollectManualOffset(audioMode) {
     // actually parses this string with: routes.py's ws_build does
     // float(manual_offset), and Python's float() rejects hex/octal/binary
     // literals ("0x10", "0b101", "0o17") that JS's Number() happily accepts
-    // as finite decimal values. Without the regex below, a value like
-    // "0x10" passes this check, the build request goes out, and only THEN
-    // comes back a "manual_offset must be a finite number of seconds"
-    // error from the server — after the progress UI already started.
-    // Restrict to the plain-decimal grammar float() actually accepts:
-    // optional sign, digits (optionally PEP 515 underscore-grouped, e.g.
-    // "1_000" — Python's float() accepts these, one digit required on each
-    // side of every underscore), optional fraction, optional exponent
-    // (also optionally underscore-grouped). A rejection happens here,
-    // before the request, matching the server's real grammar rather than
-    // JS's much wider Number() coercion. raw.replace(/_/g, '') strips the
-    // (now grammar-validated) underscores before Number() parses it, since
-    // Number("1_000") is NaN despite the regex accepting the string.
+    // as finite decimal values. Without the FPR_MANUAL_OFFSET_RE check, a
+    // value like "0x10" passes this check, the build request goes out, and
+    // only THEN comes back a "manual_offset must be a finite number of
+    // seconds" error from the server — after the progress UI already
+    // started. raw.replace(/_/g, '') strips the (now grammar-validated)
+    // underscores before Number() parses it, since Number("1_000") is NaN
+    // despite the regex accepting the string. Number.isFinite is still
+    // needed even after the regex passes: a regex-shaped value like
+    // "1e999" or the textual "Infinity"/"inf"/"nan" (the last three don't
+    // match the regex either way, but "1e999" does) still needs this
+    // separate finiteness check, since the regex only validates grammar.
     if (raw === ''
-        || !/^[+-]?(?:\d(?:_?\d)*(?:\.\d(?:_?\d)*)?|\d(?:_?\d)*\.|\.\d(?:_?\d)*)(?:e[+-]?\d(?:_?\d)*)?$/i.test(raw)
+        || !FPR_MANUAL_OFFSET_RE.test(raw)
         || !Number.isFinite(Number(raw.replace(/_/g, '')))) {
         return { offset: '', error: 'Enter a numeric manual offset in seconds, or switch back to auto-detect.' };
     }
