@@ -1278,21 +1278,29 @@ def build_feedpak(
             keys_present=keys_data is not None,
             vocal_pitch_present=vocal_pitch_data is not None,
         )
-        if audio_path is None and not extra_stems_manifest:
+        has_full_stem = any(s['id'] == 'full' for s in manifest['stems'])
+        if not manifest['stems']:
             warnings.append(
                 'No audio stem — this pack is an authoring intermediate and '
                 'will not validate until audio is added.'
             )
-        elif audio_path is None and extra_stems_manifest:
+        elif not has_full_stem:
             # 'existing_pack' mode reused a source pack's separated stems
-            # (extra_stems_manifest is non-empty — real audio content
-            # exists) but that source had no 'full' mixdown of its own, so
-            # this pack has no id=='full' entry and therefore no playable
+            # (manifest['stems'] is non-empty — real audio content exists)
+            # but that source had no 'full' mixdown of its own, so this
+            # pack has no id=='full' entry and therefore no playable
             # default stem (issue #44's "no full.ogg at all" symptom).
             # Spec-legal (§5.3.2 covers the fully-audio-less case, and
             # nothing here forbids an all-separated-stems pack), but
             # surfaced the same way the fully-audio-less case already is,
             # rather than silently shipping a pack with no default.
+            #
+            # Keyed on the assembled manifest itself, not the audio_path/
+            # extra_stems_manifest input shapes — so this can't drift out
+            # of sync with assemble_manifest's own id=='full' backfill/
+            # dedup logic (feedpakr_pack.py) if a caller shape it doesn't
+            # currently anticipate (e.g. a 'full' arriving via extra_stems)
+            # ever becomes reachable.
             warnings.append(
                 "No 'full' mixdown stem — this pack only has separated "
                 'stems reused from its source, with no combined mix. '
