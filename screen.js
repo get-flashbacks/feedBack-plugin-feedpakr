@@ -324,7 +324,19 @@ function fprCollectManualOffset(audioMode) {
     const syncMethod = syncMethodInput ? syncMethodInput.value : 'auto';
     if (syncMethod !== 'manual') return { offset: '', error: null };
     const raw = (document.getElementById('fpr-manual-offset')?.value || '').trim();
-    if (raw === '' || !Number.isFinite(Number(raw))) {
+    // Number.isFinite(Number(raw)) alone is looser than what the server
+    // actually parses this string with: routes.py's ws_build does
+    // float(manual_offset), and Python's float() rejects hex/octal/binary
+    // literals ("0x10", "0b101", "0o17") that JS's Number() happily accepts
+    // as finite decimal values. Without the regex below, a value like
+    // "0x10" passes this check, the build request goes out, and only THEN
+    // comes back a "manual_offset must be a finite number of seconds"
+    // error from the server — after the progress UI already started.
+    // Restrict to the plain-decimal grammar float() actually accepts
+    // (optional sign, digits, optional fraction, optional exponent) so a
+    // rejection happens here, before the request, matching the server's
+    // real grammar rather than JS's much wider Number() coercion.
+    if (raw === '' || !/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(raw) || !Number.isFinite(Number(raw))) {
         return { offset: '', error: 'Enter a numeric manual offset in seconds, or switch back to auto-detect.' };
     }
     return { offset: raw, error: null };
