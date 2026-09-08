@@ -59,7 +59,7 @@ def test_manual_offset_client_validation_matches_server_float_grammar():
     confusing "manual_offset must be a finite number of seconds" 400 from
     the server.
     """
-    pattern = re.compile(_extract_manual_offset_regex_pattern(), re.IGNORECASE)
+    pattern = re.compile(_extract_manual_offset_regex_pattern(), re.IGNORECASE | re.ASCII)
 
     cases = [
         "0x10", "0b101", "0o17",  # hex/octal/binary — Number() finite, float() rejects
@@ -91,6 +91,23 @@ def test_manual_offset_client_validation_matches_server_float_grammar():
         )
 
 
+def test_manual_offset_regex_extractor_mirrors_js_ascii_only_digit_class():
+    """The extracted pattern must be compiled with re.ASCII, not just
+    re.IGNORECASE. Python's `\\d` is Unicode-aware by default (matches
+    Unicode decimal digits like the Arabic-Indic '٣'), while JS's `/.../i`
+    `\\d` is always ASCII-only — so without re.ASCII the Python mirror and
+    the real JS regex would disagree on any Unicode-digit input: this test
+    would pass (Python matches, float() parses '٣' as 3.0) while the actual
+    client-side regex rejects it, silently hiding the mismatch.
+    """
+    pattern = re.compile(_extract_manual_offset_regex_pattern(), re.IGNORECASE | re.ASCII)
+    unicode_digit = "٣"  # ARABIC-INDIC DIGIT THREE
+    assert float(unicode_digit) == 3.0, "sanity: float() accepts this Unicode digit"
+    assert not pattern.match(unicode_digit), (
+        "the Python mirror must reject a Unicode digit exactly like the ASCII-only JS regex does"
+    )
+
+
 def test_manual_offset_finiteness_guard_rejects_regex_shaped_non_finite_values():
     """Pins the Number.isFinite(Number(raw.replace(...))) arm of the same
     condition, which the regex test above deliberately doesn't exercise: a
@@ -103,6 +120,6 @@ def test_manual_offset_finiteness_guard_rejects_regex_shaped_non_finite_values()
     script = (ROOT / "screen.js").read_text(encoding="utf-8")
     assert "!Number.isFinite(Number(raw.replace(/_/g, '')))" in script
 
-    pattern = re.compile(_extract_manual_offset_regex_pattern(), re.IGNORECASE)
+    pattern = re.compile(_extract_manual_offset_regex_pattern(), re.IGNORECASE | re.ASCII)
     assert pattern.match("1e999"), "sanity: regex should consider this grammar-valid"
     assert not math.isfinite(float("1e999")), "sanity: this value is not finite"
