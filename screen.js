@@ -332,11 +332,18 @@ function fprCollectManualOffset(audioMode) {
     // "0x10" passes this check, the build request goes out, and only THEN
     // comes back a "manual_offset must be a finite number of seconds"
     // error from the server — after the progress UI already started.
-    // Restrict to the plain-decimal grammar float() actually accepts
-    // (optional sign, digits, optional fraction, optional exponent) so a
-    // rejection happens here, before the request, matching the server's
-    // real grammar rather than JS's much wider Number() coercion.
-    if (raw === '' || !/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(raw) || !Number.isFinite(Number(raw))) {
+    // Restrict to the plain-decimal grammar float() actually accepts:
+    // optional sign, digits (optionally PEP 515 underscore-grouped, e.g.
+    // "1_000" — Python's float() accepts these, one digit required on each
+    // side of every underscore), optional fraction, optional exponent
+    // (also optionally underscore-grouped). A rejection happens here,
+    // before the request, matching the server's real grammar rather than
+    // JS's much wider Number() coercion. raw.replace(/_/g, '') strips the
+    // (now grammar-validated) underscores before Number() parses it, since
+    // Number("1_000") is NaN despite the regex accepting the string.
+    if (raw === ''
+        || !/^[+-]?(?:\d(?:_?\d)*(?:\.\d(?:_?\d)*)?|\d(?:_?\d)*\.|\.\d(?:_?\d)*)(?:e[+-]?\d(?:_?\d)*)?$/i.test(raw)
+        || !Number.isFinite(Number(raw.replace(/_/g, '')))) {
         return { offset: '', error: 'Enter a numeric manual offset in seconds, or switch back to auto-detect.' };
     }
     return { offset: raw, error: null };

@@ -30,3 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   number of seconds" error, after the progress UI had already started.
   Added a regex matching the plain-decimal grammar `float()` actually
   accepts, so client and server now agree on every case.
+- The manual-offset regex above initially only accepted plain digits,
+  which is *stricter* than `float()` in the opposite direction: Python's
+  `float()` also accepts PEP 515 underscore-grouped digits (`"1_000"`,
+  `"1_2.5"`), which the regex rejected outright — blocking a value the
+  server would have parsed and used successfully. Widened the regex to
+  accept underscores between digits (matching Python's own placement
+  rule: one digit required on each side of every underscore).

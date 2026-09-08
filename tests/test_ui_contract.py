@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -24,14 +25,64 @@ def test_difficulty_ladder_handoff_uses_current_plugin_endpoint():
     assert "!f.phrase_ladder" in script
 
 
-def test_manual_offset_client_validation_matches_server_float_grammar():
-    """fprCollectManualOffset must reject anything Python's float() (what
-    routes.py's ws_build actually parses this string with) would reject —
-    notably hex/octal/binary literals like "0x10", which JS's Number()
-    happily parses as a finite decimal but float() raises ValueError on.
-    Without this, a user-entered "0x10" passes client-side validation, the
-    build request goes out, and only then comes back a confusing
-    "manual_offset must be a finite number of seconds" 400 from the server.
+def _extract_manual_offset_regex_pattern():
+    """Pull the regex literal fprCollectManualOffset validates `raw` against
+    straight out of screen.js, rather than asserting on an exact source
+    string (which broke the first time the pattern was refined to also
+    accept PEP 515 underscore grouping). JS and Python's `re` agree on the
+    syntax this particular pattern uses (anchors, character classes,
+    non-capturing groups, alternation — no lookbehind/named groups), so the
+    extracted source compiles directly as a Python pattern and can be
+    exercised against real inputs instead of eyeballing the string.
     """
     script = (ROOT / "screen.js").read_text(encoding="utf-8")
-    assert r"/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(raw)" in script
+    m = re.search(r"!(/\^\[\+-\]\?.*?\$/i)\.test\(raw\)", script)
+    assert m, "could not find the manual-offset validation regex in screen.js"
+    js_literal = m.group(1)
+    assert js_literal.startswith("/") and js_literal.endswith("/i")
+    return js_literal[1:-2]  # strip the /.../i delimiters
+
+
+def test_manual_offset_client_validation_matches_server_float_grammar():
+    """fprCollectManualOffset must reject anything Python's float() (what
+    routes.py's ws_build actually parses this string with) would reject,
+    and accept everything float() accepts — notably hex/octal/binary
+    literals like "0x10" (JS's Number() happily parses these as finite
+    decimals but float() raises ValueError), and PEP 515 underscore-grouped
+    digits like "1_000" (float() accepts these; a client regex that doesn't
+    would wrongly block a value the server would have built successfully).
+    Without the hex guard, a user-entered "0x10" passes client-side
+    validation, the build request goes out, and only then comes back a
+    confusing "manual_offset must be a finite number of seconds" 400 from
+    the server.
+    """
+    pattern = re.compile(_extract_manual_offset_regex_pattern(), re.IGNORECASE)
+
+    cases = [
+        "0x10", "0b101", "0o17",  # hex/octal/binary — Number() finite, float() rejects
+        "Infinity", "inf", "nan",  # textual specials — regex must reject (finiteness is a separate check)
+        "1e999",  # regex-shaped but not finite — same story
+        "3.5", "-2.1e3", "0", ".5", "5.", "+3", "-0.0", "1e10",
+        "1_000", "1_2.5", "1e1_0",  # PEP 515 underscore grouping — float() accepts
+        "1__0", "_10", "10_", "1_.5", "1._5", "1_e10",  # invalid underscore placement
+        "", "  ", "abc",
+    ]
+    for raw in cases:
+        regex_says_numeric = bool(pattern.match(raw))
+        try:
+            float(raw.replace("_", "") if regex_says_numeric else raw)
+            float_parses = True
+        except ValueError:
+            float_parses = False
+        # The regex's job is purely grammar (does this look like a number
+        # float() would accept), not finiteness (Infinity/inf/nan/1e999 are
+        # separately rejected by the Number.isFinite check in the real
+        # function) — so assert the regex matches float()'s parseability
+        # for every case here except the textual-specials/overflow ones,
+        # which are grammar-shaped strings float() happens to parse but the
+        # regex is deliberately narrower than (a plain decimal grammar).
+        if raw in ("Infinity", "inf", "nan", "1e999"):
+            continue
+        assert regex_says_numeric == float_parses, (
+            f"{raw!r}: regex says {regex_says_numeric}, float() parses = {float_parses}"
+        )
