@@ -211,6 +211,27 @@ def test_assemble_manifest_drops_duplicate_full_from_extra_stems():
     ]
 
 
+def test_assemble_manifest_drops_duplicate_full_within_extra_stems_alone():
+    """Sourcery finding on #58: when stem_file is unset and extra_stems
+    itself (malformed/duplicated source-pack metadata) carries more than
+    one 'full' entry, only the first should survive and be marked
+    default — not every one of them."""
+    manifest = pack.assemble_manifest(
+        title='T', artist='A', duration=10.0,
+        arrangements=[],
+        stem_file=None,
+        extra_stems=[
+            {'id': 'full', 'file': 'stems/full.ogg'},
+            {'id': 'full', 'file': 'stems/full-dup.ogg'},
+            {'id': 'guitar', 'file': 'stems/guitar.ogg'},
+        ],
+    )
+    assert manifest['stems'] == [
+        {'id': 'full', 'file': 'stems/full.ogg', 'default': True},
+        {'id': 'guitar', 'file': 'stems/guitar.ogg'},
+    ]
+
+
 def test_write_feedpak_zip_extra_stem_paths_copied_verbatim(tmp_path):
     guitar_path = tmp_path / 'guitar.ogg'
     guitar_path.write_bytes(b'OggS-guitar')

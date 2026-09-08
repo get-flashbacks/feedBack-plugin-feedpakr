@@ -150,11 +150,11 @@ def assemble_manifest(
         if stem_file else []
     )
     for s in (extra_stems or []):
-        if stem_file and s['id'] == 'full':
-            # stem_file already supplied the canonical 'full' mixdown entry
-            # above — an extra_stems entry with the same id (e.g. an
-            # 'existing_pack' source that separately listed its own full
-            # mix among its stems) would otherwise duplicate the id.
+        if s['id'] == 'full' and any(e['id'] == 'full' for e in stems_list):
+            # A 'full' entry already exists — either stem_file's canonical
+            # mixdown, or (with malformed/duplicated source-pack stem
+            # metadata) an earlier extra_stems entry. Either way, another
+            # entry with the same id would duplicate the reserved id.
             continue
         entry = {'id': s['id'], 'file': s['file']}
         if s.get('name'):
