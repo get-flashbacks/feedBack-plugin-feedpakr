@@ -150,10 +150,32 @@ def assemble_manifest(
         if stem_file else []
     )
     for s in (extra_stems or []):
+        if stem_file and s['id'] == 'full':
+            # stem_file already supplied the canonical 'full' mixdown entry
+            # above — an extra_stems entry with the same id (e.g. an
+            # 'existing_pack' source that separately listed its own full
+            # mix among its stems) would otherwise duplicate the id.
+            continue
         entry = {'id': s['id'], 'file': s['file']}
         if s.get('name'):
             entry['name'] = s['name']
         stems_list.append(entry)
+
+    # Per spec §5.3.1, id='full' is the reserved complete mixdown and the
+    # only stem that should carry default:true. stem_file already produces
+    # a correctly-marked entry above; but 'existing_pack' mode can supply
+    # its *only* full mix via extra_stems (a separated-stems source pack
+    # that also happens to include a 'full' stem, reused byte-for-byte
+    # rather than re-encoded) with no default flag at all — leaving no
+    # playable default (issue #44). Backfill it here rather than at every
+    # call site, and strip 'default' from every other entry so at most one
+    # stem is ever marked default.
+    has_full = any(s['id'] == 'full' for s in stems_list)
+    for entry in stems_list:
+        if entry['id'] == 'full':
+            entry['default'] = True
+        elif has_full:
+            entry.pop('default', None)
     manifest['stems'] = stems_list
     if cover_file:
         manifest['cover'] = cover_file
