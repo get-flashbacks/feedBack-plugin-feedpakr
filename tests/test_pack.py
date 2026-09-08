@@ -171,6 +171,46 @@ def test_assemble_manifest_extra_stems_without_full_mix():
     assert manifest['stems'] == [{'id': 'guitar', 'file': 'stems/guitar.ogg'}]
 
 
+def test_assemble_manifest_backfills_default_when_full_only_in_extra_stems():
+    """issue #44: 'existing_pack' mode can supply its only full mix via
+    extra_stems (reused byte-for-byte from a source pack that already had
+    a 'full' stem) rather than through stem_file. That entry must still
+    end up marked default:true — the previous behavior wrote no default
+    at all in this shape, leaving the pack unplayable."""
+    manifest = pack.assemble_manifest(
+        title='T', artist='A', duration=10.0,
+        arrangements=[],
+        stem_file=None,
+        extra_stems=[
+            {'id': 'full', 'file': 'stems/full.ogg'},
+            {'id': 'guitar', 'file': 'stems/guitar.ogg'},
+        ],
+    )
+    assert manifest['stems'] == [
+        {'id': 'full', 'file': 'stems/full.ogg', 'default': True},
+        {'id': 'guitar', 'file': 'stems/guitar.ogg'},
+    ]
+
+
+def test_assemble_manifest_drops_duplicate_full_from_extra_stems():
+    """A source pack's extra_stems that redundantly lists its own 'full'
+    entry alongside a separately-supplied stem_file must not produce two
+    stems sharing id='full'."""
+    manifest = pack.assemble_manifest(
+        title='T', artist='A', duration=10.0,
+        arrangements=[],
+        stem_file='stems/full.ogg',
+        extra_stems=[
+            {'id': 'full', 'file': 'stems/full-dup.ogg'},
+            {'id': 'guitar', 'file': 'stems/guitar.ogg'},
+        ],
+    )
+    assert manifest['stems'] == [
+        {'id': 'full', 'file': 'stems/full.ogg', 'default': True},
+        {'id': 'guitar', 'file': 'stems/guitar.ogg'},
+    ]
+
+
 def test_write_feedpak_zip_extra_stem_paths_copied_verbatim(tmp_path):
     guitar_path = tmp_path / 'guitar.ogg'
     guitar_path.write_bytes(b'OggS-guitar')
