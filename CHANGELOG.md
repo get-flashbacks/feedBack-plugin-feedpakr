@@ -11,10 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `existing_pack` builds could produce a manifest with no stem marked
-  `default: true` (or no `full` stem entry at all) when the only full
-  mixdown came through `extra_stems` rather than `stem_file`, leaving the
-  pack unplayable. `assemble_manifest()` now backfills `default: true`
-  onto whichever stem has `id: full` regardless of which parameter
-  supplied it, dedupes a duplicate `full` entry, and strips any stray
-  `default` from non-full entries. (#44)
+- `existing_pack` builds whose source pack had only separated stems and
+  no combined mixdown produced a manifest with no `full` stem entry and
+  therefore no default-playable stem, with no warning surfaced (unlike
+  the fully-audio-less authoring-intermediate case, which already
+  warns). Now warns the same way. `assemble_manifest()` also now
+  backfills `default: true` onto whichever stem has `id: full` regardless
+  of whether it came via `stem_file` or `extra_stems`, and dedupes
+  duplicate `full` entries (including duplicates within `extra_stems`
+  itself) so at most one stem is ever marked default. (#44)
