@@ -415,6 +415,10 @@ def test_build_feedpak_existing_pack_mode_keeps_original_stems_and_cover(tmp_pat
     assert result['features']['real_audio'] is True
     assert result['features']['already_separated'] is True
     assert not any('authoring intermediate' in w for w in result['warnings'])
+    # issue #44: separated stems with no source 'full' mixdown means no
+    # id=='full' entry and therefore no default-playable stem — must be
+    # surfaced as a warning, not silently shipped.
+    assert any("No 'full' mixdown stem" in w for w in result['warnings'])
 
     import io
     import zipfile

@@ -177,10 +177,12 @@ is unrelated and unaffected by this.
 
 Bump `version` in `plugin.json` whenever a change is user-visible — new
 import capability, a fixed bug that affected real output, a changed UI
-flow (best-practices rule 4: bump on every release, the plugin manager
-uses this to detect updates). It was left at `0.1.0` from the very first
-commit through 9 subsequent commits (four full feature phases) before
-anyone noticed — don't let it go stale again. Patch (`0.1.x`) for fixes,
+flow (best-practices rule 4: bump on every release — the version is used
+for cache-busting the served JS/CSS URL, so an unbumped version means
+users keep getting stale cached files after an update). It was left at
+`0.1.0` from the very first commit through 9 subsequent commits (four
+full feature phases) before anyone noticed — don't let it go stale
+again. Patch (`0.1.x`) for fixes,
 minor (`0.x.0`) for new features, matching normal semver-during-0.x
 conventions. This is independent of `feedpak_version` (the *format*
 version) — don't conflate the two.
