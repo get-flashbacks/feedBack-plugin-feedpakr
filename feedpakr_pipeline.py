@@ -1283,6 +1283,21 @@ def build_feedpak(
                 'No audio stem — this pack is an authoring intermediate and '
                 'will not validate until audio is added.'
             )
+        elif audio_path is None and extra_stems_manifest:
+            # 'existing_pack' mode reused a source pack's separated stems
+            # (extra_stems_manifest is non-empty — real audio content
+            # exists) but that source had no 'full' mixdown of its own, so
+            # this pack has no id=='full' entry and therefore no playable
+            # default stem (issue #44's "no full.ogg at all" symptom).
+            # Spec-legal (§5.3.2 covers the fully-audio-less case, and
+            # nothing here forbids an all-separated-stems pack), but
+            # surfaced the same way the fully-audio-less case already is,
+            # rather than silently shipping a pack with no default.
+            warnings.append(
+                "No 'full' mixdown stem — this pack only has separated "
+                'stems reused from its source, with no combined mix. '
+                'It has no default-playable stem until one is added.'
+            )
 
         report('Validating…', 85)
         validation = validate.validate_pack(
