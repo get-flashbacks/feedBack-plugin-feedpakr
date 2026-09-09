@@ -20,3 +20,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of whether it came via `stem_file` or `extra_stems`, and dedupes
   duplicate `full` entries (including duplicates within `extra_stems`
   itself) so at most one stem is ever marked default. (#44)
+- `fprCollectManualOffset()`'s client-side validation for the manual
+  audio-sync offset used `Number.isFinite(Number(raw))`, which accepts
+  hex/octal/binary literals (e.g. `"0x10"`) as finite decimal values —
+  but `routes.py`'s `ws_build` parses the same string with Python's
+  `float()`, which rejects all three forms outright. A user who typed
+  such a value saw no client-side error; the build request went out and
+  only then came back the server's "manual_offset must be a finite
+  number of seconds" error, after the progress UI had already started.
+  Added a regex matching the plain-decimal grammar `float()` actually
+  accepts, so client and server now agree on every case.
+- The manual-offset regex above initially only accepted plain digits,
+  which is *stricter* than `float()` in the opposite direction: Python's
+  `float()` also accepts PEP 515 underscore-grouped digits (`"1_000"`,
+  `"1_2.5"`), which the regex rejected outright — blocking a value the
+  server would have parsed and used successfully. Widened the regex to
+  accept underscores between digits (matching Python's own placement
+  rule: one digit required on each side of every underscore).
