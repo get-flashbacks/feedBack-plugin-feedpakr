@@ -132,6 +132,18 @@ so `routes.py`'s `ws_build` checks `math.isfinite()` (not just a bare
 otherwise flow straight into the chart as a literal `Infinity`/`NaN`
 timestamp and produce a spec-invalid pack.
 
+That finiteness check alone doesn't catch a *finite* but implausible
+offset (e.g. `-3600` on a 3-minute song) — spec-valid, but unplayable.
+`build_feedpak` in `feedpakr_pipeline.py` adds a second, duration-relative
+check once the chart's real duration is known: `abs(manual_offset) >
+duration` appends a build-time warning (not a hard reject — the value is
+still spec-legal, just very likely a mistake). This sits right next to
+the existing audio/chart duration-drift sanity check, which is a
+different signal (it compares the *aligned* chart against the actual
+audio file length) that often also fires on a wildly wrong offset, but
+isn't a direct check on `manual_offset` itself and wasn't guaranteed to
+catch every implausible value.
+
 **GP3-5 repeats vs. the warp: gated, not silently wrong.**
 `gp_autosync.gp_has_expandable_repeats()` (checks for repeat
 brackets/voltas/D.S./D.C. in a GP3/4/5 file) exists specifically because
