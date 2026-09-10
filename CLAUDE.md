@@ -147,6 +147,16 @@ catch every implausible value. Gated on `audio_mode in {'sync',
 `manual_offset` for — so it never warns about a value that was silently
 ignored.
 
+Note the check is deliberately asymmetric: `duration` here is
+`song_meta.song_length`, which is measured *after* the offset is baked
+in, so a large negative offset shrinks it (truncating the song) while an
+equally large positive offset inflates it (just delaying playback start,
+not truncating anything) — `abs(manual_offset) > duration` reliably
+fires for the former but not the latter. That's intentional: a negative
+offset larger than the song is structurally impossible to play back
+correctly, while an equally large positive one is merely unusual, not
+broken.
+
 **GP3-5 repeats vs. the warp: gated, not silently wrong.**
 `gp_autosync.gp_has_expandable_repeats()` (checks for repeat
 brackets/voltas/D.S./D.C. in a GP3/4/5 file) exists specifically because
