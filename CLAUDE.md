@@ -142,7 +142,10 @@ the existing audio/chart duration-drift sanity check, which is a
 different signal (it compares the *aligned* chart against the actual
 audio file length) that often also fires on a wildly wrong offset, but
 isn't a direct check on `manual_offset` itself and wasn't guaranteed to
-catch every implausible value.
+catch every implausible value. Gated on `audio_mode in {'sync',
+'existing_pack'}` — the only modes `_resolve_audio()` actually consumes
+`manual_offset` for — so it never warns about a value that was silently
+ignored.
 
 **GP3-5 repeats vs. the warp: gated, not silently wrong.**
 `gp_autosync.gp_has_expandable_repeats()` (checks for repeat

@@ -1188,8 +1188,16 @@ def build_feedpak(
         # but wildly implausible offset (e.g. -3600s on a 3-minute song)
         # sails through both of those, produces a spec-valid manifest, and
         # is simply unplayable. An offset larger in magnitude than the
-        # song itself can never be an intentional sync correction.
-        if manual_offset is not None and duration > 0 and abs(manual_offset) > duration:
+        # song itself is highly implausible and likely to be a mistake.
+        # Gated to the audio_mode values that actually consume manual_offset
+        # (_resolve_audio ignores it entirely for 'midi'/'embedded'/'none'),
+        # so this never warns about an offset that was never applied.
+        if (
+            audio_mode in {'sync', 'existing_pack'}
+            and manual_offset is not None
+            and duration > 0
+            and abs(manual_offset) > duration
+        ):
             warnings.append(
                 f'Manual sync offset ({manual_offset:.1f}s) is larger than the song '
                 f'duration ({duration:.1f}s) and is almost certainly wrong — '
