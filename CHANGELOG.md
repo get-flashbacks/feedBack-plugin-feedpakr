@@ -37,3 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server would have parsed and used successfully. Widened the regex to
   accept underscores between digits (matching Python's own placement
   rule: one digit required on each side of every underscore).
+- `manual_offset` was validated for finiteness (rejecting `Infinity`/`NaN`)
+  but not plausibility — a finite value larger in magnitude than the
+  song itself (e.g. `-3600` on a 3-minute song) produced a spec-valid,
+  unplayable pack with no warning. `build_feedpak` now warns when
+  `abs(manual_offset) > duration`. (#54)

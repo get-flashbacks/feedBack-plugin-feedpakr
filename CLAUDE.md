@@ -132,6 +132,31 @@ so `routes.py`'s `ws_build` checks `math.isfinite()` (not just a bare
 otherwise flow straight into the chart as a literal `Infinity`/`NaN`
 timestamp and produce a spec-invalid pack.
 
+That finiteness check alone doesn't catch a *finite* but implausible
+offset (e.g. `-3600` on a 3-minute song) — spec-valid, but unplayable.
+`build_feedpak` in `feedpakr_pipeline.py` adds a second, duration-relative
+check once the chart's real duration is known: `abs(manual_offset) >
+duration` appends a build-time warning (not a hard reject — the value is
+still spec-legal, just very likely a mistake). This sits right next to
+the existing audio/chart duration-drift sanity check, which is a
+different signal (it compares the *aligned* chart against the actual
+audio file length) that often also fires on a wildly wrong offset, but
+isn't a direct check on `manual_offset` itself and wasn't guaranteed to
+catch every implausible value. Gated on `audio_mode in {'sync',
+'existing_pack'}` — the only modes `_resolve_audio()` actually consumes
+`manual_offset` for — so it never warns about a value that was silently
+ignored.
+
+Note the check is deliberately asymmetric: `duration` here is
+`song_meta.song_length`, which is measured *after* the offset is baked
+in, so a large negative offset shrinks it (truncating the song) while an
+equally large positive offset inflates it (just delaying playback start,
+not truncating anything) — `abs(manual_offset) > duration` reliably
+fires for the former but not the latter. That's intentional: a negative
+offset larger than the song is structurally impossible to play back
+correctly, while an equally large positive one is merely unusual, not
+broken.
+
 **GP3-5 repeats vs. the warp: gated, not silently wrong.**
 `gp_autosync.gp_has_expandable_repeats()` (checks for repeat
 brackets/voltas/D.S./D.C. in a GP3/4/5 file) exists specifically because

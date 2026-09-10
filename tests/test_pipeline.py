@@ -732,6 +732,35 @@ def test_build_feedpak_manual_offset_bypasses_autosync(monkeypatch, tmp_path):
     assert result['features']['tempo_aware_sync'] is False
     assert captured['audio_offset'] == 2.5
     assert not any('Autosync' in w for w in result['warnings'])
+    # A small, plausible offset must not trip the plausibility warning.
+    assert not any('almost certainly wrong' in w for w in result['warnings'])
+
+
+@fixture_available
+def test_build_feedpak_manual_offset_implausible_relative_to_duration_warns(monkeypatch, tmp_path):
+    """A finite manual_offset that passes math.isfinite() at the ws_build
+    validation layer but is larger in magnitude than the song itself is
+    spec-valid (every timestamp is a normal float) yet unplayable — this
+    must produce a build-time warning distinct from the audio/chart
+    duration-drift check below it."""
+    audio_path = tmp_path / 'audio.ogg'
+    audio_path.write_bytes(b'OggS')
+    monkeypatch.setattr(pipeline.audio_mod, 'get_audio_duration', lambda _path: None)
+    monkeypatch.setattr(pipeline.audio_mod, 'autosync_audio',
+                         lambda *a, **k: (_ for _ in ()).throw(AssertionError('must not run')))
+
+    result = pipeline.build_feedpak(
+        str(MONEY_GP5),
+        track_indices=[3],
+        arrangement_names={3: 'Bass'},
+        audio_mode='sync',
+        user_audio_path=str(audio_path),
+        manual_offset=1_000_000.0,
+        report=lambda stage, pct: None,
+    )
+
+    assert any('almost certainly wrong' in w for w in result['warnings'])
+    assert any('1000000.0s' in w for w in result['warnings'])
 
 
 @fixture_available

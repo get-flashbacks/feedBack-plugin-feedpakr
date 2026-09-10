@@ -1181,6 +1181,29 @@ def build_feedpak(
             warnings.append('No sections/beats found in the source file.')
         duration = float(song_meta.song_length) if song_meta else 0.0
 
+        # Plausibility check on manual_offset itself, independent of the
+        # audio/chart drift check below: math.isfinite()/Number.isFinite()
+        # at the ws_build/screen.js validation layer only reject values a
+        # spec-valid pack can't represent at all (Infinity/NaN) — a finite
+        # but wildly implausible offset (e.g. -3600s on a 3-minute song)
+        # sails through both of those, produces a spec-valid manifest, and
+        # is simply unplayable. An offset larger in magnitude than the
+        # song itself is highly implausible and likely to be a mistake.
+        # Gated to the audio_mode values that actually consume manual_offset
+        # (_resolve_audio ignores it entirely for 'midi'/'embedded'/'none'),
+        # so this never warns about an offset that was never applied.
+        if (
+            audio_mode in {'sync', 'existing_pack'}
+            and manual_offset is not None
+            and duration > 0
+            and abs(manual_offset) > duration
+        ):
+            warnings.append(
+                f'Manual sync offset ({manual_offset:.1f}s) is larger than the song '
+                f'duration ({duration:.1f}s) and is almost certainly wrong — '
+                f'double-check the entered value.'
+            )
+
         # Sanity check: audio duration must match chart duration (allow ±5% tolerance for rounding).
         if audio_path and duration > 0:
             audio_duration = audio_mod.get_audio_duration(audio_path)
