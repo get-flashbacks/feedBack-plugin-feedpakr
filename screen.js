@@ -976,6 +976,15 @@ function fprResolveUpgradeConflict(policy) {
 }
 
 function fprStartUpgrade(paths, conflictPolicy) {
+    // An upgrade can start via the no-conflict fast path in
+    // fprUpgradeSelected() while a conflict panel from an EARLIER click is
+    // still showing (never resolved/cancelled) — without clearing it here,
+    // a later click on one of its buttons would fire
+    // fprResolveUpgradeConflict() with the stale _pendingUpgradePaths and
+    // launch a second, concurrent ws_upgrade run (pullfrog review, PR #61).
+    document.getElementById('fpr-upgrade-conflict').classList.add('hidden');
+    _pendingUpgradePaths = null;
+
     document.getElementById('fpr-upgrade-progress').classList.remove('hidden');
     document.getElementById('fpr-upgrade-result').classList.add('hidden');
     document.getElementById('fpr-upgrade-bar').style.width = '0%';
