@@ -230,3 +230,61 @@ def test_no_conflict_writes_directly_regardless_of_policy(tmp_path, monkeypatch)
     result = done[0]['results'][0]
     assert result['output'] == 'song.feedpak'
     assert 'skipped' not in result
+
+
+def test_replace_write_failure_does_not_truncate_the_existing_feedpak(tmp_path, monkeypatch):
+    """Sourcery review finding on PR #61: a plain write_bytes() truncates
+    the target before writing, so a disk-full/interrupted write under
+    conflict_policy='replace' used to leave a previously-valid .feedpak
+    empty or partial. _atomic_write_bytes() must write to a temp file and
+    only os.replace() it in on full success — simulate a mid-write failure
+    and assert the original bytes survive untouched."""
+    dlc_root = tmp_path
+    src = _write_sloppak(dlc_root, 'song')
+    existing = dlc_root / 'song.feedpak'
+    existing.write_bytes(b'original-bytes-must-survive')
+
+    handler = _build_handler(monkeypatch, str(dlc_root))
+    routes_mod = sys.modules['routes']  # must grab the module _build_handler just (re)imported, not a stale reference
+
+    def _boom(path, data):
+        raise OSError('simulated disk-full mid-write')
+
+    monkeypatch.setattr(routes_mod, '_atomic_write_bytes', _boom)
+
+    ws = _FakeWebSocket()
+    asyncio.run(_run_upgrade(handler, ws, paths='song.sloppak', conflict_policy='replace'))
+
+    assert existing.read_bytes() == b'original-bytes-must-survive'
+    # No stray temp file left behind under _atomic_write_bytes's own
+    # cleanup path either (this monkeypatch bypasses that, so this just
+    # confirms nothing else in the handler wrote a sibling artifact).
+    assert list(dlc_root.glob('*.tmp')) == []
+    done = [m for m in ws.sent if m.get('done')]
+    result = done[0]['results'][0]
+    assert result['error'] == 'simulated disk-full mid-write'
+
+
+def test_atomic_write_bytes_cleans_up_temp_file_on_real_failure(tmp_path, monkeypatch):
+    """Drives _atomic_write_bytes directly (not through the route) so the
+    temp-file cleanup path in its own except block is exercised for real —
+    fail the final os.replace() (the swap-in step) and confirm neither the
+    original file's bytes nor a stray temp file survive."""
+    _build_handler(monkeypatch, str(tmp_path))  # ensures routes is importable (fastapi isn't installed here)
+    routes_mod = sys.modules['routes']
+
+    target = tmp_path / 'song.feedpak'
+    target.write_bytes(b'original-bytes')
+
+    def _boom_replace(_src, _dst):
+        raise OSError('simulated replace failure')
+
+    monkeypatch.setattr(routes_mod.os, 'replace', _boom_replace)
+
+    try:
+        routes_mod._atomic_write_bytes(target, b'new-bytes')
+    except OSError:
+        pass
+
+    assert target.read_bytes() == b'original-bytes'
+    assert list(tmp_path.glob('.*.tmp')) == []
