@@ -191,13 +191,20 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
     re-running the whole upgrade. Writes to a sibling temp file in the same
     directory (so the final os.replace is same-filesystem and therefore
     atomic on POSIX and Windows alike) and only swaps it in once the full
-    write has succeeded."""
+    write has succeeded.
+
+    mkstemp() creates its file 0600 (owner-only) regardless of the process
+    umask, unlike the plain open(path, 'wb') this replaces (which produces
+    the usual umask-derived mode, typically 0644) — chmod back to 0644
+    before the swap-in so a re-upgraded .feedpak doesn't silently become
+    unreadable to any other user/process that could read the original."""
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f'.{path.name}.', suffix='.tmp')
     try:
         with open(fd, 'wb') as f:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
+        os.chmod(tmp_name, 0o644)
         os.replace(tmp_name, path)
     except BaseException:
         try:

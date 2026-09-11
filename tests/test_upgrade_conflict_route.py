@@ -288,3 +288,20 @@ def test_atomic_write_bytes_cleans_up_temp_file_on_real_failure(tmp_path, monkey
 
     assert target.read_bytes() == b'original-bytes'
     assert list(tmp_path.glob('.*.tmp')) == []
+
+
+def test_atomic_write_bytes_restores_umask_derived_permissions(tmp_path, monkeypatch):
+    """pullfrog review, PR #61: mkstemp() creates its file 0600 regardless
+    of the process umask, unlike the plain open(path, 'wb') it replaces —
+    without the chmod, a re-upgraded .feedpak would silently become
+    unreadable to anyone but the owning process."""
+    import stat
+
+    _build_handler(monkeypatch, str(tmp_path))
+    routes_mod = sys.modules['routes']
+
+    target = tmp_path / 'song.feedpak'
+    routes_mod._atomic_write_bytes(target, b'new-bytes')
+
+    mode = stat.S_IMODE(target.stat().st_mode)
+    assert mode == 0o644
