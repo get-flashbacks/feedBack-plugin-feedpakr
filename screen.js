@@ -933,6 +933,10 @@ function fprSelectAllSloppaks(state) {
     document.querySelectorAll('[data-sloppak-check]').forEach((cb) => { cb.checked = state; });
 }
 
+// Paths selected for the run currently awaiting a conflict-resolution
+// choice (see fprResolveUpgradeConflict) — null when no run is pending one.
+let _pendingUpgradePaths = null;
+
 async function fprUpgradeSelected() {
     const paths = Array.from(document.querySelectorAll('[data-sloppak-check]'))
         .filter((cb) => cb.checked)
@@ -942,13 +946,43 @@ async function fprUpgradeSelected() {
         return;
     }
 
+    // already_upgraded is exactly "a matching .feedpak already exists" (see
+    // list_sloppaks() server-side) — an explicitly re-selected one of those
+    // is an intentional re-upgrade, so ask what to do with it rather than
+    // silently skipping (old default-selection behavior) or silently
+    // creating a Song_2.feedpak (old write-path behavior). Asked fresh every
+    // run, never persisted as a sticky setting.
+    const conflicts = paths.filter((p) => {
+        const entry = _sloppaks.find((s) => s.path === p);
+        return entry && entry.already_upgraded;
+    });
+    if (conflicts.length) {
+        _pendingUpgradePaths = paths;
+        const countEl = document.getElementById('fpr-upgrade-conflict-count');
+        countEl.textContent = conflicts.length === 1 ? '1 file' : `${conflicts.length} files`;
+        document.getElementById('fpr-upgrade-conflict').classList.remove('hidden');
+        return;
+    }
+    fprStartUpgrade(paths, 'versioned'); // no conflicts in this batch — policy is moot
+}
+
+// Called by the conflict panel's buttons. `policy` is null for Cancel.
+function fprResolveUpgradeConflict(policy) {
+    document.getElementById('fpr-upgrade-conflict').classList.add('hidden');
+    const paths = _pendingUpgradePaths;
+    _pendingUpgradePaths = null;
+    if (!policy || !paths) return;
+    fprStartUpgrade(paths, policy);
+}
+
+function fprStartUpgrade(paths, conflictPolicy) {
     document.getElementById('fpr-upgrade-progress').classList.remove('hidden');
     document.getElementById('fpr-upgrade-result').classList.add('hidden');
     document.getElementById('fpr-upgrade-bar').style.width = '0%';
     document.getElementById('fpr-upgrade-stage').textContent = 'Starting…';
 
     _upgradeDone = false;
-    const params = new URLSearchParams({ paths: paths.join(',') });
+    const params = new URLSearchParams({ paths: paths.join(','), conflict_policy: conflictPolicy });
     const ws = new WebSocket(`${WS_BASE}/upgrade?${params}`);
 
     ws.onmessage = (ev) => {
@@ -1003,6 +1037,12 @@ function fprShowUpgradeResults(results) {
                 <p class="text-xs text-red-400">${esc(r.error)}</p>
             </div>`;
         }
+        if (r.skipped) {
+            return `<div class="py-2 border-b border-gray-800 last:border-0">
+                <p class="text-sm text-gray-300">${esc(r.path)}
+                    <span class="text-gray-500 text-xs">— skipped (already upgraded)</span></p>
+            </div>`;
+        }
         const badge = r.valid
             ? '<span class="text-green-400 text-xs">✓ valid</span>'
             : '<span class="text-amber-400/80 text-xs">⚠ issues</span>';
@@ -1039,5 +1079,6 @@ window.fprShowTab = fprShowTab;
 window.fprRefreshSloppaks = fprRefreshSloppaks;
 window.fprSelectAllSloppaks = fprSelectAllSloppaks;
 window.fprUpgradeSelected = fprUpgradeSelected;
+window.fprResolveUpgradeConflict = fprResolveUpgradeConflict;
 
 })();

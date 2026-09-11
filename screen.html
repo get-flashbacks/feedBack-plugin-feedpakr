@@ -272,6 +272,31 @@
             </button>
         </div>
 
+        <div id="fpr-upgrade-conflict" class="hidden bg-dark-700 border border-amber-800/50 rounded-xl p-4 mb-4">
+            <p class="text-sm text-gray-300 mb-1">
+                <span id="fpr-upgrade-conflict-count"></span> of the selected files already have a matching .feedpak.
+            </p>
+            <p class="text-xs text-gray-500 mb-3">Choose what to do with those — this choice applies to this run only, it isn't saved.</p>
+            <div class="flex flex-wrap gap-2">
+                <button onclick="fprResolveUpgradeConflict('skip')"
+                    class="px-3 py-1.5 rounded-lg text-xs bg-dark-600 hover:bg-dark-500 text-gray-300 transition">
+                    Skip already-upgraded files
+                </button>
+                <button onclick="fprResolveUpgradeConflict('replace')"
+                    class="px-3 py-1.5 rounded-lg text-xs bg-dark-600 hover:bg-dark-500 text-gray-300 transition">
+                    Replace existing .feedpak
+                </button>
+                <button onclick="fprResolveUpgradeConflict('versioned')"
+                    class="px-3 py-1.5 rounded-lg text-xs bg-dark-600 hover:bg-dark-500 text-gray-300 transition">
+                    Keep both (numbered copy)
+                </button>
+                <button onclick="fprResolveUpgradeConflict(null)"
+                    class="px-3 py-1.5 rounded-lg text-xs text-gray-500 hover:text-white transition">
+                    Cancel
+                </button>
+            </div>
+        </div>
+
         <div id="fpr-upgrade-progress" class="hidden">
             <div class="progress-bar mb-3"><div class="fill" id="fpr-upgrade-bar" style="width:0%"></div></div>
             <p class="text-xs text-gray-500" id="fpr-upgrade-stage">Starting…</p>
