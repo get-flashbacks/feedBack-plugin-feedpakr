@@ -901,9 +901,25 @@ def setup(app, context):
         return {'sloppaks': entries}
 
     @app.websocket('/ws/plugins/feedpakr/upgrade')
-    async def ws_upgrade(websocket: WebSocket, paths: str = ''):
+    async def ws_upgrade(websocket: WebSocket, paths: str = '', conflict_policy: str = 'versioned'):
         """Batch-convert selected .sloppak files (comma-separated,
-        DLC-relative) to .feedpak. Originals are never touched."""
+        DLC-relative) to .feedpak. Originals are never touched.
+
+        `conflict_policy` (issue #49) governs what happens when a selected
+        .sloppak already has a matching .feedpak (same dir, same stem — the
+        same test list_sloppaks() uses for `already_upgraded`):
+          - 'skip'      — leave the existing .feedpak alone, don't re-run
+                          the conversion at all.
+          - 'replace'   — overwrite the existing .feedpak with the fresh
+                          conversion.
+          - 'versioned' (default, matches pre-#49 behavior) — write a
+                          numbered copy (Song_2.feedpak, …) via
+                          unique_output_path, leaving the existing file
+                          untouched.
+        Chosen per-run by the caller (screen.js prompts for it whenever the
+        selection includes an already-upgraded file); never persisted
+        server-side, so there is no sticky default to get stale.
+        """
         await websocket.accept()
 
         dlc = _get_dlc_dir()
@@ -917,6 +933,9 @@ def setup(app, context):
             await websocket.send_json({'error': 'No files selected'})
             await websocket.close()
             return
+
+        if conflict_policy not in ('skip', 'replace', 'versioned'):
+            conflict_policy = 'versioned'  # unrecognized value — fall back to the pre-#49 default rather than reject the whole batch
 
         progress_queue: asyncio.Queue = asyncio.Queue()
 
@@ -939,11 +958,22 @@ def setup(app, context):
                     results.append({'path': rel, 'error': 'File no longer exists'})
                     continue
 
+                existing = src_path.with_suffix('.feedpak')
+                if existing.exists() and conflict_policy == 'skip':
+                    results.append({
+                        'path': rel, 'skipped': 'already_upgraded',
+                        'output_rel': existing.relative_to(dlc_root).as_posix(),
+                    })
+                    continue
+
                 try:
                     result = _upgrade.upgrade_sloppak(str(src_path))
-                    out_path = _pack.unique_output_path(
-                        src_path.parent, src_path.stem, ext='.feedpak',
-                    )
+                    if existing.exists() and conflict_policy == 'replace':
+                        out_path = existing
+                    else:
+                        out_path = _pack.unique_output_path(
+                            src_path.parent, src_path.stem, ext='.feedpak',
+                        )
                     out_path.write_bytes(result['bytes'])
                     rel_out = out_path.relative_to(dlc_root).as_posix()
                     try:

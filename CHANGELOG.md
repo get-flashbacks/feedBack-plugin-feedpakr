@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Re-upgrading an already-upgraded `.sloppak` silently created a
+  numbered duplicate `.feedpak`** (`Song_2.feedpak`, `Song_3.feedpak`, …)
+  instead of asking what to do. The Upgrade Library batch route now takes
+  a `conflict_policy` (skip / replace / versioned — versioned matches the
+  old default behavior exactly, so nothing changes unless a file is
+  explicitly re-selected). The UI now shows a one-time choice — applied
+  to that run only, never saved as a sticky default — whenever the
+  current selection includes a file already flagged `already_upgraded`.
+  (issue #49)
+
 - `existing_pack` builds whose source pack had only separated stems and
   no combined mixdown produced a manifest with no `full` stem entry and
   therefore no default-playable stem, with no warning surfaced (unlike
