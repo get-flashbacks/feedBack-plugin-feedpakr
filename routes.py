@@ -84,6 +84,7 @@ import asyncio
 import base64
 import json
 import math
+import os
 import re
 import secrets
 import shutil
@@ -179,6 +180,31 @@ def _route_registered(app, method: str, path: str) -> bool:
         if methods is not None and method in methods:
             return True
     return False
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write `data` to `path` without ever leaving a partially-written file
+    at that path. `Path.write_bytes()` truncates its target before writing,
+    so a disk-full error or crash mid-write on a `replace` conflict_policy
+    run (which targets an existing, previously-valid .feedpak) would
+    otherwise leave that file empty or corrupt with no way back short of
+    re-running the whole upgrade. Writes to a sibling temp file in the same
+    directory (so the final os.replace is same-filesystem and therefore
+    atomic on POSIX and Windows alike) and only swaps it in once the full
+    write has succeeded."""
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f'.{path.name}.', suffix='.tmp')
+    try:
+        with open(fd, 'wb') as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            Path(tmp_name).unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def setup(app, context):
@@ -974,7 +1000,7 @@ def setup(app, context):
                         out_path = _pack.unique_output_path(
                             src_path.parent, src_path.stem, ext='.feedpak',
                         )
-                    out_path.write_bytes(result['bytes'])
+                    _atomic_write_bytes(out_path, result['bytes'])
                     rel_out = out_path.relative_to(dlc_root).as_posix()
                     try:
                         meta = _extract_meta(out_path)
