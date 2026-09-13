@@ -105,6 +105,7 @@ _audio = None
 _upgrade = None
 _validate = None
 _lyrics = None
+_dedupe = None
 
 # GP files are binary (zip-compressed for .gpx/.gp, raw for .gp3/4/5) and
 # can run larger than a MusicXML score — 30 MB comfortably covers real-world
@@ -215,7 +216,7 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
 
 
 def setup(app, context):
-    global _get_dlc_dir, _extract_meta, _meta_db, _log, _pipeline, _pack, _audio, _upgrade, _validate, _lyrics
+    global _get_dlc_dir, _extract_meta, _meta_db, _log, _pipeline, _pack, _audio, _upgrade, _validate, _lyrics, _dedupe
     _get_dlc_dir = context['get_dlc_dir']
     _extract_meta = context['extract_meta']
     _meta_db = context['meta_db']
@@ -227,6 +228,7 @@ def setup(app, context):
     _upgrade = context['load_sibling']('feedpakr_upgrade')
     _validate = context['load_sibling']('feedpakr_validate')
     _lyrics = context['load_sibling']('feedpakr_lyrics')
+    _dedupe = context['load_sibling']('feedpakr_dedupe')
 
     @app.get('/api/plugins/feedpakr/handoffs')
     async def handoffs():
@@ -933,6 +935,55 @@ def setup(app, context):
         entries = await loop.run_in_executor(None, _scan)
         return {'sloppaks': entries}
 
+    @app.get('/api/plugins/feedpakr/duplicates')
+    async def list_duplicate_feedpaks():
+        """Scan the DLC folder for .feedpak files with byte-identical
+        archive content (issue #49) — e.g. leftovers from re-upgrading a
+        .sloppak before conflict_policy existed. Read-only; deleting is a
+        separate, explicit step below."""
+        dlc = _get_dlc_dir()
+        if not dlc:
+            return {'error': 'DLC folder not configured'}
+        loop = asyncio.get_running_loop()
+        try:
+            groups = await loop.run_in_executor(None, _dedupe.find_duplicate_feedpaks, dlc)
+        except Exception as e:
+            _log.exception('feedpakr: duplicate scan failed')
+            return {'error': str(e)}
+        return {'groups': groups, 'trash_dir': _dedupe.TRASH_DIRNAME}
+
+    @app.post('/api/plugins/feedpakr/duplicates/delete')
+    async def delete_duplicate_feedpaks(data: dict):
+        """Remove caller-selected duplicate .feedpak files — moved into
+        dlc/.feedpakr_trash/, never unlinked (recoverable deletion, issue
+        #49). Requires explicit per-run confirmation from the UI
+        (`confirm: true`) on top of the picking itself, since this is a
+        destructive-feeling action even though it's recoverable; every
+        other safety property (never a .sloppak, never a path escaping the
+        DLC folder, never the last copy in a group, re-verified against a
+        fresh scan) is enforced inside feedpakr_dedupe itself regardless of
+        what this route passes through."""
+        dlc = _get_dlc_dir()
+        if not dlc:
+            return {'error': 'DLC folder not configured'}
+        if not data.get('confirm'):
+            return {'error': 'confirm must be true to delete anything'}
+        paths = data.get('paths')
+        if not isinstance(paths, list) or not paths:
+            return {'error': 'paths must be a non-empty list'}
+        if not all(isinstance(p, str) for p in paths):
+            return {'error': 'paths must be a list of strings'}
+
+        loop = asyncio.get_running_loop()
+        try:
+            result = await loop.run_in_executor(
+                None, _dedupe.delete_duplicate_feedpaks, dlc, paths,
+            )
+        except Exception as e:
+            _log.exception('feedpakr: duplicate delete failed')
+            return {'error': str(e)}
+        return result
+
     @app.websocket('/ws/plugins/feedpakr/upgrade')
     async def ws_upgrade(websocket: WebSocket, paths: str = '', conflict_policy: str = 'versioned'):
         """Batch-convert selected .sloppak files (comma-separated,
@@ -964,6 +1015,20 @@ def setup(app, context):
         rel_paths = [p for p in paths.split(',') if p.strip()]
         if not rel_paths:
             await websocket.send_json({'error': 'No files selected'})
+            await websocket.close()
+            return
+
+        # issue #49: this endpoint only ever means "convert a .sloppak" —
+        # accepting anything else (a .feedpak, an arbitrary file) would run
+        # upgrade_sloppak() against content it was never designed to read.
+        # Reject the whole batch up front rather than best-effort-erroring
+        # per file inside _do_upgrade, matching how audio_mode/tracks are
+        # validated above before any work starts.
+        non_sloppak = [p for p in rel_paths if Path(p).suffix.lower() != '.sloppak']
+        if non_sloppak:
+            await websocket.send_json({
+                'error': f'Only .sloppak paths may be upgraded, got: {", ".join(non_sloppak)}',
+            })
             await websocket.close()
             return
 
