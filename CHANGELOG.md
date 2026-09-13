@@ -9,7 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add entries under Added, Changed, Deprecated, Removed, Fixed, or Security as changes land. -->
 
+### Added
+
+- **Duplicate `.feedpak` cleanup** (issue #49). The Upgrade Library tab
+  can now scan the DLC folder for `.feedpak` files with byte-identical
+  archive content — e.g. the numbered copies (`Song_2.feedpak`, …) left
+  behind by re-upgrading before `conflict_policy` existed — and remove
+  caller-selected duplicates after explicit review and confirmation.
+  Detection hashes actual member content, not file bytes/size/mtime, so
+  two packs built from the same source at different times (different zip
+  timestamps) are still correctly recognized as identical. Removal is
+  recoverable: files are moved into a `.feedpakr_trash/` folder inside the
+  DLC directory rather than deleted outright, and at least one copy per
+  duplicate group is always kept even if every member is selected. Never
+  touches `.sloppak` sources, and every safety check (extension, DLC-root
+  containment, still-a-real-duplicate, not-the-last-copy) is re-verified
+  at delete time against a fresh scan, not whatever the UI last saw.
+
 ### Fixed
+
+- **The Upgrade Library WebSocket accepted any path, not just
+  `.sloppak`.** A request naming a `.feedpak` (or any other file) would
+  reach `upgrade_sloppak()`, which was never designed to read it. Paths
+  are now validated to end in `.sloppak` (case-insensitive) up front —
+  the whole batch is rejected with a clear error if any entry doesn't
+  match, before any conversion work starts. (issue #49)
 
 - **Re-upgrading an already-upgraded `.sloppak` silently created a
   numbered duplicate `.feedpak`** (`Song_2.feedpak`, `Song_3.feedpak`, …)
