@@ -64,7 +64,11 @@ def _load_routes(monkeypatch):
 
 
 def _real_load_sibling(name):
-    return importlib.import_module(name)
+    # Test double for context['load_sibling'] — always invoked by routes.py's
+    # own setup() with a hardcoded sibling-module name literal (e.g.
+    # 'feedpakr_dedupe'), never with external input, matching the identical
+    # pattern already used in test_upgrade_conflict_route.py.
+    return importlib.import_module(name)  # nosec  # nosemgrep
 
 
 def _context(dlc_dir):
