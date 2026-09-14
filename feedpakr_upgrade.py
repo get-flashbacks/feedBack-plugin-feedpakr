@@ -158,6 +158,20 @@ def _read_member(src: Path, rel: str) -> bytes | None:
         return _read_zip_member_capped(zf, rel)
 
 
+def list_archive_members(src: Path) -> tuple[list[str], int]:
+    """Public wrapper around `_list_members` — safe (path-traversal-checked)
+    member listing for a .sloppak/.feedpak, zip or directory form. Used by
+    feedpakr_dedupe so duplicate-detection reuses the same zip-slip guard
+    as the upgrade path rather than re-implementing it."""
+    return _list_members(src)
+
+
+def read_archive_member(src: Path, rel: str) -> bytes | None:
+    """Public wrapper around `_read_member` — safe (path-traversal- and
+    size-capped) member read. See `list_archive_members`."""
+    return _read_member(src, rel)
+
+
 def _section_time(entry: dict) -> float | None:
     """Sections have been seen in the wild keyed by both `time` (the
     convention this project's own gp2rs/song.py pipeline and every real
