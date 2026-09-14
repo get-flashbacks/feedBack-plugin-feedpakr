@@ -960,9 +960,9 @@ def setup(app, context):
         (`confirm: true`) on top of the picking itself, since this is a
         destructive-feeling action even though it's recoverable; every
         other safety property (never a .sloppak, never a path escaping the
-        DLC folder, never the last copy in a group, re-verified against a
-        fresh scan) is enforced inside feedpakr_dedupe itself regardless of
-        what this route passes through."""
+        DLC folder, never a group's oldest/canonical member, re-verified
+        against a fresh scan) is enforced inside feedpakr_dedupe itself
+        regardless of what this route passes through."""
         dlc = _get_dlc_dir()
         if not dlc:
             return {'error': 'DLC folder not configured'}

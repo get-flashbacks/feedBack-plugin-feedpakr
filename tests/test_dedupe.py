@@ -47,6 +47,26 @@ def test_compute_pack_content_hash_none_for_unreadable_archive(tmp_path):
     assert dedupe.compute_pack_content_hash(bogus) is None
 
 
+def test_compute_pack_content_hash_none_for_corrupt_member(tmp_path):
+    """A zip with a readable central directory but a corrupted deflate
+    stream for one member must skip that pack (None), not raise —
+    zlib.error propagating out of a member read used to abort the whole
+    library scan over a single mangled file (pullfrog PR #62 review)."""
+    path = tmp_path / 'corrupt.feedpak'
+    with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('manifest.yaml', b'title: Song\n' * 50)  # compressible enough to actually deflate
+    # Corrupt the compressed data region in place — the local file header
+    # for the first (only) entry starts at offset 0; its fixed fields run
+    # 30 bytes, followed by the filename, then the compressed payload.
+    raw = bytearray(path.read_bytes())
+    payload_start = 30 + len('manifest.yaml')
+    for i in range(payload_start, payload_start + 8):
+        raw[i] = raw[i] ^ 0xFF
+    path.write_bytes(bytes(raw))
+
+    assert dedupe.compute_pack_content_hash(path) is None
+
+
 def test_find_duplicate_feedpaks_groups_identical_packs(tmp_path):
     members = {'manifest.yaml': b'title: Song\n', 'stems/full.ogg': b'OggS'}
     _write_pack(tmp_path / 'Song.feedpak', members, date_time=(2024, 1, 1, 0, 0, 0))
@@ -89,6 +109,32 @@ def test_find_duplicate_feedpaks_different_sizes_never_grouped(tmp_path):
     _write_pack(tmp_path / 'B.feedpak', {'manifest.yaml': b'a much longer manifest body here'})
 
     assert dedupe.find_duplicate_feedpaks(tmp_path) == []
+
+
+def test_find_duplicate_feedpaks_excludes_symlink_escaping_dlc_root(tmp_path):
+    """A .feedpak symlink pointing outside the DLC folder must never be
+    scanned as a candidate — rglob doesn't distinguish real files from
+    symlinks, so without an explicit resolved-containment check the GET
+    endpoint would happily hash and report a file that lives entirely
+    outside the DLC root (pullfrog PR #62 review)."""
+    import os
+
+    outside_dir = tmp_path.parent / 'outside_dlc'
+    outside_dir.mkdir(exist_ok=True)
+    members = {'manifest.yaml': b'title: Song\n'}
+    real_target = outside_dir / 'Secret.feedpak'
+    _write_pack(real_target, members, date_time=(2024, 1, 1, 0, 0, 0))
+
+    dlc_root = tmp_path
+    _write_pack(dlc_root / 'Song.feedpak', members, date_time=(2024, 2, 1, 0, 0, 0))
+    link = dlc_root / 'Escaping.feedpak'
+    os.symlink(real_target, link)
+
+    groups = dedupe.find_duplicate_feedpaks(dlc_root)
+
+    # Would otherwise be a 2-member duplicate group (identical manifest
+    # content) — the symlink must be excluded, leaving no duplicates.
+    assert groups == []
 
 
 # ── delete_duplicate_feedpaks ───────────────────────────────────────────────
@@ -146,14 +192,15 @@ def test_delete_refuses_path_escaping_dlc_root(tmp_path):
 
 def test_delete_refuses_last_remaining_copy_in_group(tmp_path):
     """A duplicate pair (not trio) must keep at least one member — deleting
-    the second copy of a two-file group is refused."""
+    the newer copy is fine, but the older (protected) one can't be removed
+    once it's the sole survivor."""
     members = {'manifest.yaml': b'title: Song\n'}
     a = tmp_path / 'Song.feedpak'
     b = tmp_path / 'Song_2.feedpak'
     _write_pack(a, members, date_time=(2024, 1, 1, 0, 0, 0))
     _write_pack(b, members, date_time=(2024, 2, 1, 0, 0, 0))
 
-    # Delete one copy — fine, one survives.
+    # Delete the newer copy — fine, the older (protected) one survives.
     r1 = dedupe.delete_duplicate_feedpaks(tmp_path, ['Song_2.feedpak'])
     assert 'trashed_to' in r1['results'][0]
     assert a.exists()
@@ -161,15 +208,39 @@ def test_delete_refuses_last_remaining_copy_in_group(tmp_path):
     # Now try to delete the last surviving copy of that same (now-solo) file —
     # it's no longer part of any duplicate GROUP at all (only one file left),
     # so this hits the "no longer a detected duplicate" path, not the
-    # last-copy guard specifically — either way, it must be refused.
+    # oldest-copy guard specifically — either way, it must be refused.
     r2 = dedupe.delete_duplicate_feedpaks(tmp_path, ['Song.feedpak'])
     assert 'error' in r2['results'][0]
     assert a.exists()
 
 
-def test_delete_refuses_emptying_a_group_across_multiple_paths_in_one_request(tmp_path):
-    """The last-copy guard must hold even when a single request tries to
-    remove every member of a group at once, not just one at a time."""
+def test_delete_refuses_the_oldest_copy_while_group_still_has_others(tmp_path):
+    """Distinct from the 'no longer a duplicate' path above: this tries to
+    remove the oldest/canonical member while the group still genuinely has
+    2+ members, exercising the protected-path check itself rather than the
+    solo-file fallback."""
+    members = {'manifest.yaml': b'title: Song\n'}
+    a = tmp_path / 'Song.feedpak'
+    b = tmp_path / 'Song_2.feedpak'
+    _write_pack(a, members, date_time=(2024, 1, 1, 0, 0, 0))
+    _write_pack(b, members, date_time=(2024, 2, 1, 0, 0, 0))
+
+    result = dedupe.delete_duplicate_feedpaks(tmp_path, ['Song.feedpak'])
+
+    assert a.exists()
+    assert b.exists()  # untouched — the request only named the protected file
+    assert 'canonical' in result['results'][0]['error']
+
+
+def test_delete_select_all_on_a_trio_keeps_the_oldest_not_whichever_is_last(tmp_path):
+    """Regression test (pullfrog PR #62 review): selecting every member of
+    a group used to trash whichever file happened to be processed last
+    (DOM/request order), which is the *newest* one given how the UI orders
+    checkboxes — deleting the clean-named canonical file and leaving a
+    numbered copy as the sole survivor, which then confuses
+    already_upgraded detection (keyed off the clean name) into thinking
+    the source was never upgraded. The survivor must always be the
+    oldest, deterministically, regardless of the order paths are given."""
     a, b, c = _make_duplicate_trio(tmp_path)
 
     result = dedupe.delete_duplicate_feedpaks(
@@ -177,14 +248,32 @@ def test_delete_refuses_emptying_a_group_across_multiple_paths_in_one_request(tm
     )
 
     outcomes = {r['path']: r for r in result['results']}
-    succeeded = [p for p, r in outcomes.items() if 'trashed_to' in r]
-    failed = [p for p, r in outcomes.items() if 'error' in r]
-    assert len(succeeded) == 2
-    assert len(failed) == 1
-    # Exactly one of the three original files must still be on disk.
-    survivors = [p for p in (a, b, c) if p.exists()]
-    assert len(survivors) == 1
-    assert failed[0] == survivors[0].name
+    assert 'error' in outcomes['Song.feedpak']  # the oldest — protected
+    assert 'trashed_to' in outcomes['Song_2.feedpak']
+    assert 'trashed_to' in outcomes['Song_3.feedpak']
+    assert a.exists()
+    assert not b.exists()
+    assert not c.exists()
+
+
+def test_delete_refuses_emptying_a_group_across_multiple_paths_in_one_request(tmp_path):
+    """The oldest-copy guard must hold even when a single request tries to
+    remove every member of a group at once, not just one at a time — and,
+    unlike a simple 'keep whichever remains' counter, must keep the SAME
+    (oldest) file regardless of what order the paths were given in."""
+    a, b, c = _make_duplicate_trio(tmp_path)
+
+    result = dedupe.delete_duplicate_feedpaks(
+        tmp_path, ['Song_3.feedpak', 'Song_2.feedpak', 'Song.feedpak'],  # reverse order this time
+    )
+
+    outcomes = {r['path']: r for r in result['results']}
+    assert 'error' in outcomes['Song.feedpak']
+    assert 'trashed_to' in outcomes['Song_2.feedpak']
+    assert 'trashed_to' in outcomes['Song_3.feedpak']
+    assert a.exists()  # the oldest survives regardless of request order
+    assert not b.exists()
+    assert not c.exists()
 
 
 def test_delete_refuses_stale_path_no_longer_a_real_duplicate(tmp_path):
@@ -213,3 +302,16 @@ def test_delete_reports_missing_file_as_no_longer_a_duplicate(tmp_path):
     result = dedupe.delete_duplicate_feedpaks(tmp_path, ['Song_2.feedpak'])
 
     assert 'No longer a detected duplicate' in result['results'][0]['error']
+
+
+def test_trash_destination_never_collides_for_same_basename(tmp_path):
+    """Regression test (pullfrog PR #62 review): the previous
+    check-then-act exists() loop could collide (and silently overwrite one
+    trashed file with another) for two same-second requests sharing a
+    basename — e.g. 'sub/Song.feedpak' and 'Song.feedpak' from different
+    groups. A random component per call removes the race entirely; calling
+    it many times in a tight loop (worst case for a same-second collision)
+    must still produce all-distinct destinations."""
+    destinations = {dedupe._trash_destination(tmp_path, 'Song.feedpak') for _ in range(200)}
+    assert len(destinations) == 200
+

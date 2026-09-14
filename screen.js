@@ -1087,65 +1087,112 @@ function fprFmtBytes(n) {
     return n < 1024 * 1024 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-async function fprScanDuplicates() {
+// Builds a DOM element from a tag + plain-property bag (className,
+// textContent, id, type, disabled, ...) rather than an innerHTML template
+// string — server-provided values here (file paths under the user's own
+// DLC folder) are treated as untrusted rather than trusted-by-context, so
+// this whole panel avoids innerHTML entirely instead of relying solely on
+// esc()-based escaping the way most of this file's simpler lists do.
+function fprEl(tag, props, children) {
+    const el = document.createElement(tag);
+    if (props) Object.assign(el, props);
+    for (const child of children || []) el.appendChild(child);
+    return el;
+}
+
+function fprSetDuplicatesMessage(text, className) {
     const container = document.getElementById('fpr-duplicates-list');
-    container.innerHTML = '<p class="text-xs text-gray-600 mt-3">Scanning…</p>';
+    container.replaceChildren(fprEl('p', { className, textContent: text }));
+}
+
+async function fprScanDuplicates() {
+    fprSetDuplicatesMessage('Scanning…', 'text-xs text-gray-600 mt-3');
+    let data;
     try {
         const resp = await fetch(`${API_BASE}/duplicates`);
-        const data = await resp.json();
-        if (data.error) {
-            container.innerHTML = `<p class="text-xs text-red-400 mt-3">${esc(data.error)}</p>`;
-            return;
-        }
-        _duplicateGroups = data.groups || [];
-        if (!_duplicateGroups.length) {
-            container.innerHTML = '<p class="text-xs text-gray-600 mt-3">No duplicate .feedpak files found.</p>';
-            return;
-        }
-        const trashDir = data.trash_dir || '.feedpakr_trash';
-        container.innerHTML = `
-            <div class="mt-3 space-y-3">
-                ${_duplicateGroups.map((g) => `
-                    <div class="bg-dark-600 border border-gray-800 rounded-lg p-3">
-                        <p class="text-xs text-gray-500 mb-2">${g.files.length} identical copies</p>
-                        ${g.files.map((f) => `
-                            <label class="flex items-center gap-2 text-xs text-gray-300 py-1 cursor-pointer select-none">
-                                <input type="checkbox" data-dup-check="${esc(f.path)}" class="accent-blue-500 shrink-0">
-                                <span class="flex-1 truncate">${esc(f.path)}</span>
-                                <span class="text-gray-600 shrink-0">${fprFmtBytes(f.size)} — ${esc(new Date(f.mtime * 1000).toLocaleString())}</span>
-                            </label>`).join('')}
-                    </div>`).join('')}
-            </div>
-            <p id="fpr-duplicates-msg" class="hidden text-xs text-amber-400 mt-2"></p>
-            <div class="flex gap-3 mt-3">
-                <button onclick="fprRequestDeleteDuplicates()"
-                    class="px-4 py-2 rounded-xl text-xs bg-red-900/40 hover:bg-red-900/60 text-red-300 transition">
-                    Delete Selected
-                </button>
-            </div>
-            <div id="fpr-duplicates-confirm" class="hidden bg-dark-700 border border-amber-800/50 rounded-xl p-4 mt-3">
-                <p class="text-sm text-gray-300 mb-1">
-                    <span id="fpr-duplicates-confirm-count"></span> file(s) will be moved to
-                    <code class="text-gray-400">${esc(trashDir)}/</code> in your DLC folder.
-                </p>
-                <p class="text-xs text-gray-500 mb-3">
-                    Not permanently deleted — recover them from that folder by hand if needed.
-                    At least one copy per duplicate group is always kept, even if you select all of them.
-                </p>
-                <div class="flex gap-2">
-                    <button onclick="fprConfirmDeleteDuplicates()"
-                        class="px-3 py-1.5 rounded-lg text-xs bg-red-900/60 hover:bg-red-900/80 text-red-200 transition">
-                        Confirm
-                    </button>
-                    <button onclick="fprCancelDeleteDuplicates()"
-                        class="px-3 py-1.5 rounded-lg text-xs text-gray-500 hover:text-white transition">
-                        Cancel
-                    </button>
-                </div>
-            </div>`;
+        data = await resp.json();
     } catch (err) {
-        container.innerHTML = `<p class="text-xs text-red-400 mt-3">Failed to load: ${esc(String(err))}</p>`;
+        fprSetDuplicatesMessage(`Failed to load: ${String(err)}`, 'text-xs text-red-400 mt-3');
+        return;
     }
+    if (data.error) {
+        fprSetDuplicatesMessage(data.error, 'text-xs text-red-400 mt-3');
+        return;
+    }
+    _duplicateGroups = data.groups || [];
+    if (!_duplicateGroups.length) {
+        fprSetDuplicatesMessage('No duplicate .feedpak files found.', 'text-xs text-gray-600 mt-3');
+        return;
+    }
+    const trashDir = data.trash_dir || '.feedpakr_trash';
+
+    const groupsWrap = fprEl('div', { className: 'mt-3 space-y-3' });
+    for (const g of _duplicateGroups) {
+        const groupDiv = fprEl('div', { className: 'bg-dark-600 border border-gray-800 rounded-lg p-3' });
+        groupDiv.appendChild(fprEl('p', {
+            className: 'text-xs text-gray-500 mb-2',
+            textContent: `${g.files.length} identical copies`,
+        }));
+        g.files.forEach((f, idx) => {
+            // find_duplicate_feedpaks sorts oldest-first; the oldest is the
+            // group's protected/canonical member (feedpakr_dedupe.py never
+            // lets it be deleted) — disable its checkbox so that's obvious
+            // up front rather than only surfacing as a server error later.
+            const isOldest = idx === 0;
+            const label = fprEl('label', {
+                className: 'flex items-center gap-2 text-xs py-1 select-none '
+                    + (isOldest ? 'text-gray-600' : 'text-gray-300 cursor-pointer'),
+            });
+            const checkbox = fprEl('input', { type: 'checkbox', className: 'accent-blue-500 shrink-0' });
+            checkbox.setAttribute('data-dup-check', f.path);
+            checkbox.disabled = isOldest;
+            const metaText = `${fprFmtBytes(f.size)} — ${new Date(f.mtime * 1000).toLocaleString()}`
+                + (isOldest ? ' (kept — oldest copy)' : '');
+            label.appendChild(checkbox);
+            label.appendChild(fprEl('span', { className: 'flex-1 truncate', textContent: f.path }));
+            label.appendChild(fprEl('span', { className: 'text-gray-600 shrink-0', textContent: metaText }));
+            groupDiv.appendChild(label);
+        });
+        groupsWrap.appendChild(groupDiv);
+    }
+
+    const msg = fprEl('p', { id: 'fpr-duplicates-msg', className: 'hidden text-xs text-amber-400 mt-2' });
+
+    const deleteBtn = fprEl('button', {
+        className: 'px-4 py-2 rounded-xl text-xs bg-red-900/40 hover:bg-red-900/60 text-red-300 transition',
+        textContent: 'Delete Selected',
+    });
+    deleteBtn.addEventListener('click', fprRequestDeleteDuplicates);
+    const btnRow = fprEl('div', { className: 'flex gap-3 mt-3' }, [deleteBtn]);
+
+    const confirmP1 = fprEl('p', { className: 'text-sm text-gray-300 mb-1' }, [
+        fprEl('span', { id: 'fpr-duplicates-confirm-count' }),
+        document.createTextNode(' file(s) will be moved to '),
+        fprEl('code', { className: 'text-gray-400', textContent: `${trashDir}/` }),
+        document.createTextNode(' in your DLC folder.'),
+    ]);
+    const confirmP2 = fprEl('p', {
+        className: 'text-xs text-gray-500 mb-3',
+        textContent: 'Not permanently deleted — recover them from that folder by hand if needed. '
+            + 'The oldest copy in each group is always kept.',
+    });
+    const confirmYes = fprEl('button', {
+        className: 'px-3 py-1.5 rounded-lg text-xs bg-red-900/60 hover:bg-red-900/80 text-red-200 transition',
+        textContent: 'Confirm',
+    });
+    confirmYes.addEventListener('click', fprConfirmDeleteDuplicates);
+    const confirmNo = fprEl('button', {
+        className: 'px-3 py-1.5 rounded-lg text-xs text-gray-500 hover:text-white transition',
+        textContent: 'Cancel',
+    });
+    confirmNo.addEventListener('click', fprCancelDeleteDuplicates);
+    const confirmPanel = fprEl('div', {
+        id: 'fpr-duplicates-confirm',
+        className: 'hidden bg-dark-700 border border-amber-800/50 rounded-xl p-4 mt-3',
+    }, [confirmP1, confirmP2, fprEl('div', { className: 'flex gap-2' }, [confirmYes, confirmNo])]);
+
+    const container = document.getElementById('fpr-duplicates-list');
+    container.replaceChildren(groupsWrap, msg, btnRow, confirmPanel);
 }
 
 function fprRequestDeleteDuplicates() {
@@ -1183,20 +1230,22 @@ async function fprConfirmDeleteDuplicates() {
         });
         const data = await resp.json();
         if (data.error) {
-            container.insertAdjacentHTML('afterbegin',
-                `<p class="text-xs text-red-400 mb-2">${esc(data.error)}</p>`);
+            container.prepend(fprEl('p', { className: 'text-xs text-red-400 mb-2', textContent: data.error }));
             return;
         }
         const failed = (data.results || []).filter((r) => r.error);
         if (failed.length) {
-            container.insertAdjacentHTML('afterbegin', `
-                <div class="text-xs text-amber-400 mb-2">
-                    ${failed.map((r) => `<p>${esc(r.path)}: ${esc(r.error)}</p>`).join('')}
-                </div>`);
+            const box = fprEl('div', { className: 'text-xs text-amber-400 mb-2' });
+            for (const r of failed) {
+                box.appendChild(fprEl('p', { textContent: `${r.path}: ${r.error}` }));
+            }
+            container.prepend(box);
         }
     } catch (err) {
-        container.insertAdjacentHTML('afterbegin',
-            `<p class="text-xs text-red-400 mb-2">Failed to delete: ${esc(String(err))}</p>`);
+        container.prepend(fprEl('p', {
+            className: 'text-xs text-red-400 mb-2',
+            textContent: `Failed to delete: ${String(err)}`,
+        }));
     }
     fprScanDuplicates(); // re-scan: rescans from disk, so trashed/kept files reflect reality
 }

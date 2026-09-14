@@ -18,12 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caller-selected duplicates after explicit review and confirmation.
   Detection hashes actual member content, not file bytes/size/mtime, so
   two packs built from the same source at different times (different zip
-  timestamps) are still correctly recognized as identical. Removal is
-  recoverable: files are moved into a `.feedpakr_trash/` folder inside the
-  DLC directory rather than deleted outright, and at least one copy per
-  duplicate group is always kept even if every member is selected. Never
-  touches `.sloppak` sources, and every safety check (extension, DLC-root
-  containment, still-a-real-duplicate, not-the-last-copy) is re-verified
+  timestamps) are still correctly recognized as identical. A corrupt
+  member (or a symlink pointing outside the DLC folder) is skipped rather
+  than aborting the whole scan. Removal is recoverable: files are moved
+  into a `.feedpakr_trash/` folder inside the DLC directory rather than
+  deleted outright, with a collision-free destination name even under
+  concurrent requests. Each group's **oldest** file — the one
+  `already_upgraded` detection keys off — is always protected and can
+  never be removed via this flow, even by selecting every member of a
+  group at once; its checkbox is shown disabled in the UI, and the
+  backend refuses it independently regardless of what the UI sends.
+  Never touches `.sloppak` sources, and every other safety check
+  (extension, DLC-root containment, still-a-real-duplicate) is re-verified
   at delete time against a fresh scan, not whatever the UI last saw.
 
 ### Fixed

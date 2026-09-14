@@ -6,8 +6,8 @@ byte-different-but-content-identical .feedpak files behind — e.g.
 `Song.feedpak` and `Song_2.feedpak` built from the same .sloppak at
 different times. This module finds those groups by actual archive
 *content* (not file size/mtime/name), and removes caller-selected members
-of a group — never a whole group, never anything but a .feedpak, and
-never a hard delete.
+of a group — never the group's oldest ("canonical") member, never
+anything but a .feedpak, and never a hard delete.
 
 Two-phase detection keeps this cheap for a real DLC library:
   1. `_cheap_fingerprint` reads only each zip's central directory (member
@@ -20,8 +20,10 @@ Two-phase detection keeps this cheap for a real DLC library:
 from __future__ import annotations
 
 import hashlib
+import secrets
 import time
 import zipfile
+import zlib
 from pathlib import Path
 
 import feedpakr_upgrade as upgrade
@@ -51,10 +53,12 @@ def compute_pack_content_hash(path: Path) -> str | None:
     independent of zip metadata (timestamps, compression method/level,
     member order) — two packs built from the same source at different
     times hash identically iff their real content is byte-identical.
-    Returns None if the archive can't be read cleanly, or contains an
-    unsafe (path-escaping) member — such a pack is never treated as a
-    clean duplicate of anything, matching every other best-effort function
-    in this plugin."""
+    Returns None if the archive can't be read cleanly, contains an unsafe
+    (path-escaping) member, or any single member fails to decompress
+    (corrupt deflate stream raises zlib.error, not BadZipFile/OSError) —
+    such a pack is never treated as a clean duplicate of anything, and a
+    single corrupt file must never abort a whole-library scan, matching
+    every other best-effort function in this plugin."""
     try:
         members, unsafe = upgrade.list_archive_members(path)
     except (zipfile.BadZipFile, OSError):
@@ -63,7 +67,10 @@ def compute_pack_content_hash(path: Path) -> str | None:
         return None
     digest = hashlib.sha256()
     for rel in sorted(members):
-        raw = upgrade.read_archive_member(path, rel)
+        try:
+            raw = upgrade.read_archive_member(path, rel)
+        except (zipfile.BadZipFile, OSError, zlib.error):
+            return None
         if raw is None:
             return None
         digest.update(rel.encode('utf-8'))
@@ -79,10 +86,15 @@ def find_duplicate_feedpaks(dlc_root: str | Path) -> list[dict]:
 
         [{'hash': str, 'files': [{'path', 'size', 'mtime'}, ...]}, ...]
 
-    `files` within a group is sorted oldest-first (mtime) — a UI can use
-    that ordering to suggest "keep the oldest" without this function
-    imposing any deletion policy itself. The trash folder is excluded so a
-    previous cleanup's soft-deleted files are never re-offered.
+    `files` within a group is sorted oldest-first (mtime) — `files[0]` is
+    the group's protected "canonical" member (see delete_duplicate_feedpaks).
+    The trash folder is excluded so a previous cleanup's soft-deleted files
+    are never re-offered.
+
+    A `.feedpak` that is (or resolves through) a symlink pointing outside
+    dlc_root is skipped rather than scanned — `rglob` doesn't distinguish
+    real files from symlinks, and a naive scan would happily hash and
+    report content that lives entirely outside the DLC folder.
     """
     dlc_root = Path(dlc_root).resolve()
     trash_dir = dlc_root / TRASH_DIRNAME
@@ -96,6 +108,10 @@ def find_duplicate_feedpaks(dlc_root: str | Path) -> list[dict]:
             continue  # inside the trash folder — never a live duplicate candidate
         except ValueError:
             pass
+        try:
+            p.resolve().relative_to(dlc_root)
+        except (OSError, ValueError):
+            continue  # a symlink escaping dlc_root (or unresolvable) — never a candidate
         fp = _cheap_fingerprint(p)
         if fp is None:
             continue
@@ -129,16 +145,22 @@ def find_duplicate_feedpaks(dlc_root: str | Path) -> list[dict]:
 
 
 def _trash_destination(dlc_root: Path, rel: str) -> Path:
+    """A destination inside dlc_root/.feedpakr_trash/ that's unique without
+    a check-then-act exists() loop: two concurrent deletes of files that
+    share a basename (e.g. from different groups/subdirectories) landing
+    in the same second used to be able to race a plain increment-and-check
+    loop and silently overwrite one trashed copy with another — the one
+    path where "never a hard delete" could actually lose data. A random
+    token makes any collision astronomically unlikely regardless of
+    timing, so there's nothing left to race. Doesn't create the trash
+    directory itself — callers processing a batch should do that once
+    up front (see delete_duplicate_feedpaks) rather than every call
+    redundantly re-checking it."""
     trash_dir = dlc_root / TRASH_DIRNAME
-    trash_dir.mkdir(exist_ok=True)
     stem = Path(rel).name
     ts = time.strftime('%Y%m%dT%H%M%S')
-    candidate = trash_dir / f'{ts}_{stem}'
-    n = 2
-    while candidate.exists():
-        candidate = trash_dir / f'{ts}_{n}_{stem}'
-        n += 1
-    return candidate
+    token = secrets.token_hex(4)
+    return trash_dir / f'{ts}_{token}_{stem}'
 
 
 def delete_duplicate_feedpaks(dlc_root: str | Path, rel_paths: list[str]) -> dict:
@@ -150,14 +172,24 @@ def delete_duplicate_feedpaks(dlc_root: str | Path, rel_paths: list[str]) -> dic
       - never anything but a .feedpak path (a .sloppak, or any other
         extension, is rejected outright — not silently skipped, since a
         caller passing one is a bug worth surfacing)
-      - never a path that escapes dlc_root
+      - never a path that escapes dlc_root (checked against the *resolved*
+        path, so a symlink can't be used to reach outside it either)
       - re-verifies against a FRESH `find_duplicate_feedpaks` scan (not
         whatever the caller/UI last saw) that the path is still part of a
         real duplicate group — closes the race where the file changed
         between listing and deleting
-      - never empties a group entirely, even across multiple paths in one
-        request — at least one member of every duplicate group always
-        survives
+      - never removes a group's oldest ("canonical") member — the one a
+        clean re-upgrade would key off (list_sloppaks' already_upgraded
+        check is `sloppak.with_suffix('.feedpak')`, which is exactly the
+        clean, undecorated name a from-scratch conversion produces).
+        Determining "oldest" this way, from a scan each call takes fresh,
+        rather than tracking a shared "how many are left" counter across
+        the request, also removes the concurrency hazard a counter has:
+        two overlapping delete requests each recompute the same protected
+        path independently, so no interleaving of concurrent requests can
+        ever result in a group losing its canonical member, and a
+        select-everything request can never delete more than
+        (group size - 1) regardless of what order the paths arrive in.
 
     Recoverable, not permanent: moved into a DLC-local trash folder rather
     than deleted, since this plugin has no dependency on an OS trash/
@@ -166,12 +198,14 @@ def delete_duplicate_feedpaks(dlc_root: str | Path, rel_paths: list[str]) -> dic
     for this operation at all.
     """
     dlc_root = Path(dlc_root).resolve()
+    (dlc_root / TRASH_DIRNAME).mkdir(exist_ok=True)
     current_groups = find_duplicate_feedpaks(dlc_root)
     group_by_path: dict[str, dict] = {}
+    protected_path_by_hash: dict[str, str] = {}
     for g in current_groups:
+        protected_path_by_hash[g['hash']] = g['files'][0]['path']  # oldest-first
         for f in g['files']:
             group_by_path[f['path']] = g
-    remaining_in_group = {g['hash']: len(g['files']) for g in current_groups}
 
     results = []
     for rel in rel_paths:
@@ -192,10 +226,11 @@ def delete_duplicate_feedpaks(dlc_root: str | Path, rel_paths: list[str]) -> dic
                 'error': 'No longer a detected duplicate (rescan and try again).',
             })
             continue
-        if remaining_in_group[group['hash']] <= 1:
+        if rel == protected_path_by_hash[group['hash']]:
             results.append({
                 'path': rel,
-                'error': 'Refusing to remove the last remaining copy in this group.',
+                'error': 'Refusing to remove the oldest copy in this group — '
+                         'it is kept as the canonical version.',
             })
             continue
         if not target.is_file():
@@ -209,7 +244,6 @@ def delete_duplicate_feedpaks(dlc_root: str | Path, rel_paths: list[str]) -> dic
             results.append({'path': rel, 'error': str(e)})
             continue
 
-        remaining_in_group[group['hash']] -= 1
         results.append({'path': rel, 'trashed_to': dest.relative_to(dlc_root).as_posix()})
 
     return {'results': results, 'trash_dir': TRASH_DIRNAME}
