@@ -18,9 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caller-selected duplicates after explicit review and confirmation.
   Detection hashes actual member content, not file bytes/size/mtime, so
   two packs built from the same source at different times (different zip
-  timestamps) are still correctly recognized as identical. A corrupt
-  member (or a symlink pointing outside the DLC folder) is skipped rather
-  than aborting the whole scan. Removal is recoverable: files are moved
+  timestamps) are still correctly recognized as identical. A corrupt,
+  encrypted, or otherwise unreadable member (or a symlink pointing outside
+  the DLC folder) is skipped rather than aborting the whole scan. Removal
+  is recoverable: files are moved
   into a `.feedpakr_trash/` folder inside the DLC directory rather than
   deleted outright, with a collision-free destination name even under
   concurrent requests. Each group's **oldest** file — the one

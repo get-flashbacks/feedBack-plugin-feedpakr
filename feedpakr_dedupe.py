@@ -54,11 +54,13 @@ def compute_pack_content_hash(path: Path) -> str | None:
     member order) — two packs built from the same source at different
     times hash identically iff their real content is byte-identical.
     Returns None if the archive can't be read cleanly, contains an unsafe
-    (path-escaping) member, or any single member fails to decompress
-    (corrupt deflate stream raises zlib.error, not BadZipFile/OSError) —
-    such a pack is never treated as a clean duplicate of anything, and a
-    single corrupt file must never abort a whole-library scan, matching
-    every other best-effort function in this plugin."""
+    (path-escaping) member, or any single member fails to decompress —
+    corrupt deflate data raises zlib.error, an encrypted member raises
+    RuntimeError, and an unsupported compression method raises
+    NotImplementedError, none of which are BadZipFile/OSError — such a
+    pack is never treated as a clean duplicate of anything, and a single
+    corrupt/encrypted/unsupported file must never abort a whole-library
+    scan, matching every other best-effort function in this plugin."""
     try:
         members, unsafe = upgrade.list_archive_members(path)
     except (zipfile.BadZipFile, OSError):
@@ -69,7 +71,7 @@ def compute_pack_content_hash(path: Path) -> str | None:
     for rel in sorted(members):
         try:
             raw = upgrade.read_archive_member(path, rel)
-        except (zipfile.BadZipFile, OSError, zlib.error):
+        except (zipfile.BadZipFile, OSError, zlib.error, RuntimeError, NotImplementedError):
             return None
         if raw is None:
             return None

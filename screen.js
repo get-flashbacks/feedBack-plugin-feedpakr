@@ -1155,6 +1155,16 @@ async function fprScanDuplicates() {
         });
         groupsWrap.appendChild(groupDiv);
     }
+    // Keep the confirm dialog's count live: unchecking a box while the
+    // dialog is open must not leave it announcing a stale number that
+    // doesn't match what fprConfirmDeleteDuplicates actually sends.
+    groupsWrap.addEventListener('change', (e) => {
+        if (!e.target.matches('[data-dup-check]')) return;
+        const countEl = document.getElementById('fpr-duplicates-confirm-count');
+        if (countEl) {
+            countEl.textContent = document.querySelectorAll('[data-dup-check]:checked').length;
+        }
+    });
 
     const msg = fprEl('p', { id: 'fpr-duplicates-msg', className: 'hidden text-xs text-amber-400 mt-2' });
 

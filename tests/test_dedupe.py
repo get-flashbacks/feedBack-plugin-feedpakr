@@ -2,6 +2,7 @@
 and safe cleanup). Pure filesystem/zip logic — no GP sample fixtures
 needed, so these run everywhere the repo itself is importable."""
 
+import struct
 import zipfile
 from pathlib import Path
 
@@ -62,6 +63,35 @@ def test_compute_pack_content_hash_none_for_corrupt_member(tmp_path):
     payload_start = 30 + len('manifest.yaml')
     for i in range(payload_start, payload_start + 8):
         raw[i] = raw[i] ^ 0xFF
+    path.write_bytes(bytes(raw))
+
+    assert dedupe.compute_pack_content_hash(path) is None
+
+
+def test_compute_pack_content_hash_none_for_encrypted_member(tmp_path):
+    """A member with the zip encryption bit set makes ZipFile.open() raise
+    RuntimeError ("password required for extraction"), not
+    BadZipFile/OSError/zlib.error — that used to escape the member-read
+    catch and abort the whole library scan over a single encrypted file
+    (pullfrog PR #62 follow-up review)."""
+    path = tmp_path / 'encrypted.feedpak'
+    with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('manifest.yaml', b'title: Song\n')
+
+    # Flip the encryption bit (bit 0) of the general-purpose flag field in
+    # both the local file header (offset 6 from the start of the single
+    # entry, which starts at offset 0) and the matching central directory
+    # header (offset 8 from its signature).
+    raw = bytearray(path.read_bytes())
+    local_flag_offset = 6
+    flag = struct.unpack_from('<H', raw, local_flag_offset)[0]
+    struct.pack_into('<H', raw, local_flag_offset, flag | 0x1)
+
+    central_start = raw.find(b'PK\x01\x02')
+    assert central_start != -1
+    central_flag_offset = central_start + 8
+    flag = struct.unpack_from('<H', raw, central_flag_offset)[0]
+    struct.pack_into('<H', raw, central_flag_offset, flag | 0x1)
     path.write_bytes(bytes(raw))
 
     assert dedupe.compute_pack_content_hash(path) is None
