@@ -200,7 +200,8 @@ def _enhance_chord_template_names(
     for index, candidates in by_template.items():
         template = templates[index]
         if (len(candidates) == 1 and isinstance(template, dict)
-                and not template.get('name') and not template.get('displayName')):
+                and not str(template.get('name') or '').strip()
+                and not str(template.get('displayName') or '').strip()):
             name = next(iter(candidates))
             template.update(name=name, displayName=name)
             added += 1

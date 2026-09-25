@@ -48,6 +48,21 @@ def test_chordr_skips_a_template_when_its_events_disagree():
     assert wire["templates"][0]["name"] == ""
 
 
+def test_chordr_treats_whitespace_only_template_names_as_unnamed():
+    wire = {
+        "chords": [{"id": 0}],
+        "templates": [{"name": "  ", "displayName": "\t"}],
+    }
+    count = pipeline._enhance_chord_template_names(
+        wire, lambda *args, **kwargs: {"resolvedNames": ["C"]},
+        tuning=[], capo=0, is_bass=False,
+    )
+
+    assert count == 1
+    assert wire["templates"][0]["name"] == "C"
+    assert wire["templates"][0]["displayName"] == "C"
+
+
 def test_chordr_rejects_malformed_analysis_result():
     with pytest.raises(ValueError, match="invalid name list"):
         pipeline._enhance_chord_template_names(
