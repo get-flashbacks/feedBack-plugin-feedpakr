@@ -125,11 +125,10 @@ def test_manual_offset_finiteness_guard_rejects_regex_shaped_non_finite_values()
     assert not math.isfinite(float("1e999")), "sanity: this value is not finite"
 
 
-def test_chordr_enrichment_is_optional_and_only_enabled_when_available():
+def test_chordr_enrichment_is_optional_and_degrades_gracefully():
     html = (ROOT / "screen.html").read_text(encoding="utf-8")
     script = (ROOT / "screen.js").read_text(encoding="utf-8")
 
     assert 'id="fpr-enhance-chords" checked' in html
-    assert "_handoffAvailability.chordr" in script
     assert "enhance_chords:" in script
     assert "f.chordr_names" in script
