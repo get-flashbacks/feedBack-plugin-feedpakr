@@ -541,6 +541,7 @@ function fprBuild() {
         combine_same_name: combineSameName,
         audio_mode: audioMode,
         manual_offset: manualOffset,
+        enhance_chords: document.getElementById('fpr-enhance-chords')?.checked ? 'true' : 'false',
     });
     const ws = new WebSocket(`${WS_BASE}/build?${params}`);
 
@@ -794,6 +795,7 @@ function fprShowResult(msg) {
         f.lyrics && 'lyrics',
         f.vocal_pitch && 'vocal pitch',
         f.handshapes && 'chord shapes',
+        f.chordr_names ? `${f.chordr_names} chord name(s) from Chordr` : null,
         f.tones && 'tone changes',
         f.drum_arrangements ? `${f.drum_arrangements} drum arrangement(s)` : null,
         f.notation ? `${f.notation} notation part(s)` : null,
