@@ -21,7 +21,7 @@ let _audioAttached = false;
 let _existingPackAttached = false;
 let _sloppaks = [];
 let _upgradeDone = false;
-let _handoffAvailability = { preview: null, split: null, lyricsSync: null, difficulty: null, chordr: null };
+let _handoffAvailability = { preview: null, split: null, lyricsSync: null, difficulty: null };
 
 function esc(s) {
     return String(s)
@@ -419,7 +419,6 @@ async function fprHandleCover(file) {
 }
 
 function fprShowParsed(data) {
-    fprProbeHandoffs();
     document.getElementById('fpr-dropzone').classList.add('hidden');
     document.getElementById('fpr-parsed').classList.remove('hidden');
     document.getElementById('fpr-progress').classList.add('hidden');
@@ -585,20 +584,6 @@ function fprBuild() {
 // stems, or authors difficulty ladders itself.
 
 async function fprProbeHandoffs() {
-    if (_handoffAvailability.chordr === null) {
-        try {
-            const r = await fetch(`${API_BASE}/handoffs`);
-            const data = await r.json();
-            _handoffAvailability.chordr = !!(r.ok && data.handoffs && data.handoffs.chordr);
-        } catch (err) { _handoffAvailability.chordr = false; }
-        const option = document.getElementById('fpr-enhance-chords');
-        const note = document.getElementById('fpr-chordr-status');
-        if (option) {
-            option.disabled = !_handoffAvailability.chordr;
-            if (!_handoffAvailability.chordr) option.checked = false;
-        }
-        if (note && !_handoffAvailability.chordr) note.textContent = 'Chordr is not installed; feedpakr will keep the source chord data.';
-    }
     if (_handoffAvailability.preview === null) {
         try {
             const r = await fetch('/api/plugins/song_preview/audit');
