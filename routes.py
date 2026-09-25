@@ -233,14 +233,12 @@ def setup(app, context):
     @app.get('/api/plugins/feedpakr/handoffs')
     async def handoffs():
         """Report which sibling plugin handoff endpoints are registered."""
-        handoffs = {
-            key: _route_registered(app, method, path)
-            for key, (method, path) in _HANDOFF_ROUTES.items()
+        return {
+            'handoffs': {
+                key: _route_registered(app, method, path)
+                for key, (method, path) in _HANDOFF_ROUTES.items()
+            }
         }
-        handoffs['chordr'] = callable(getattr(
-            getattr(app, 'state', None), 'chordr_analyze_chart_chords_v1', None
-        ))
-        return {'handoffs': handoffs}
 
     @app.post('/api/plugins/feedpakr/upload')
     async def upload_gp(data: dict):
