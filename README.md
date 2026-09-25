@@ -29,6 +29,7 @@ Plugin id: `feedpakr`. Install into `plugins/feedpakr/` (folder name must match 
 | Capo | **Fixed**, both source families | GP3-5 `Track.offset`; GPIF `CapoFret` property — gp2rs/gp2rs_gpx hardcode/ignore this |
 | Sections, beats | **Fixed** | `song_timeline.json`, via `song.load_song()` on the converted (playback-schedule-accurate) XML |
 | Hand shapes | **Derived**, both families | gp2rs never populates these ("empty for now") — feedpakr groups consecutive same-chord hits into contiguous spans |
+| Chord names | **Optional Chordr enhancement** | When selected during import, Chordr's shared chart-analysis bridge names unnamed templates from played voicings and carries names across partial strums; existing names are preserved |
 | Tone changes | **Fixed** where the source has them | GPIF: read back from XML gp2rs_gpx already injects but `song.parse_arrangement` silently drops; GP3-5: scanned from every selected track's `mixTableChange`, not just the first (unlike the legacy importer this project replaces) |
 | Key signature | **New capability** | `keys.json`, GP3-5 `MeasureHeader.keySignature` / GPIF `MasterBar/Key`, spelled via the standard circle-of-fifths table |
 | Lyrics | **Fixed** (GPIF), **approximated** (GP3-5, labeled as such) | GPIF vocal track's own `<vocals>` XML (exact timing); GP3-5's single per-measure `song.lyrics` blob has no per-syllable timing to work with |
@@ -87,7 +88,8 @@ put it there, without needing any changes to the feedBack core.
   the upload-token / streaming-build pattern used by `feedBack-plugin-musicxml-import`.
 - `feedpakr_pipeline.py` — orchestrates parsing, conversion (via the host's `gp2rs` /
   `gp2rs_gpx` / `song`), and all fidelity enrichment (capo, timeline, lyrics, keys,
-  tones, handshapes, drums-as-arrangements, notation, vocal pitch).
+  tones, handshapes, drums-as-arrangements, notation, vocal pitch, and optional
+  Chordr-based chord naming).
 - `feedpakr_audio.py` — MIDI synthesis, GP8 embedded audio extraction, autosync,
   YouTube fetch, and OGG normalization. Every function degrades to `(None, ..., error)`
   rather than raising.
@@ -108,7 +110,9 @@ put it there, without needing any changes to the feedBack core.
   a DLC-relative `.feedpak` path for checking existing packs without rebuilding them.
 
 Handoffs to `song-preview`/`stem-splitter`/`difficulty_ladder` are invoked by
-`screen.js` (`fprProbeHandoffs` / `fprRunHandoff`). The backend exposes
+`screen.js` (`fprProbeHandoffs` / `fprRunHandoff`). Optional Chordr naming runs
+during the build through Chordr's versioned chart-analysis bridge; it fills only
+missing names and reports a warning if the capability is unavailable or fails. The backend exposes
 `GET /api/plugins/feedpakr/handoffs` as a read-only availability probe for server
 sibling routes; feedpakr still leaves the actual preview generation, stem
 splitting, and difficulty-ladder generation work to the dedicated plugins.

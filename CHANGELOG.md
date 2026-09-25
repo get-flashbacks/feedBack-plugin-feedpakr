@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Optional Chordr chord naming during Guitar Pro imports.** When Chordr is
+  installed, the import form can use its shared chart-analysis bridge to name
+  unnamed chord templates from played voicings and partial strums. Existing
+  chart names are retained; unavailable or failed analysis leaves the build
+  intact and reports a warning.
+
 - **Duplicate `.feedpak` cleanup** (issue #49). The Upgrade Library tab
   can now scan the DLC folder for `.feedpak` files with byte-identical
   archive content — e.g. the numbered copies (`Song_2.feedpak`, …) left

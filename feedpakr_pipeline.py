@@ -161,6 +161,63 @@ def _check_extension(gp_path: str) -> None:
         _assert_gpif_within_size_limits(gp_path)
 
 
+def _enhance_chord_template_names(
+    wire: dict, analyzer, *, tuning: list[int], capo: int, is_bass: bool,
+) -> int:
+    """Fill only unnamed chord templates using chordr's shared analysis API.
+
+    Chordr returns names per chord event (including names inherited across
+    partial strums). A template is updated only when all events referring to
+    it agree on a name and the source did not already provide one.
+    """
+    chords = wire.get('chords') or []
+    templates = wire.get('templates') or []
+    if not chords or not templates:
+        return 0
+    result = analyzer(
+        chords,
+        context={
+            'tuning': list(tuning or []),
+            'capo': int(capo or 0),
+            'stringCount': len(tuning or []),
+            'isBass': bool(is_bass),
+        },
+        templates=templates,
+    )
+    resolved_names = result.get('resolvedNames') if isinstance(result, dict) else None
+    if not isinstance(resolved_names, list) or len(resolved_names) != len(chords):
+        raise ValueError('Chordr returned an invalid name list')
+
+    names_by_template: dict[int, set[str]] = {}
+    for chord, name in zip(chords, resolved_names):
+        if not isinstance(chord, dict) or not isinstance(name, str) or not name.strip():
+            continue
+        try:
+            template_id = int(chord.get('id'))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= template_id < len(templates):
+            names_by_template.setdefault(template_id, set()).add(name.strip())
+
+    updated = 0
+    for template_id, names in names_by_template.items():
+        template = templates[template_id]
+        if not isinstance(template, dict):
+            continue
+        existing_name = template.get('name')
+        if isinstance(existing_name, str) and existing_name.strip():
+            continue
+        if len(names) != 1:
+            continue
+        name = next(iter(names))
+        template['name'] = name
+        display_name = template.get('displayName')
+        if not isinstance(display_name, str) or not display_name.strip():
+            template['displayName'] = name
+        updated += 1
+    return updated
+
+
 def _manifest_arrangement_zero_has_phrases(manifest: dict, arrangement_files: dict[str, dict]) -> bool:
     arrangements = manifest.get('arrangements') or []
     if not arrangements:
@@ -780,6 +837,8 @@ def build_feedpak(
     existing_pack: dict | None = None,
     manual_offset: float | None = None,
     cover_path: str | None = None,
+    chordr_analyzer=None,
+    enhance_chords: bool = False,
     report=lambda stage, pct: None,
 ) -> dict:
     """Run the full GP3-8 -> .feedpak pipeline. Returns:
@@ -820,6 +879,8 @@ def build_feedpak(
 
     is_gpif = _is_gpif(gp_path)
     warnings: list[str] = []
+    if enhance_chords and chordr_analyzer is None:
+        warnings.append('Chordr enhancement requested, but chordr is not available on this host.')
     if is_gpif and _gpif_has_repeat_markup(gp_path):
         warnings.append(
             'This file uses repeats/alternate endings, which GP6/7/8 import '
@@ -947,6 +1008,7 @@ def build_feedpak(
         arrangement_files: dict[str, dict] = {}
         drum_tab_files: dict[str, dict] = {}
         notation_files: dict[str, dict] = {}
+        chordr_names_added = 0
         taken_ids: set[str] = set()
         lyrics_entries: list[dict] | None = None
         vocal_pitch_data: dict | None = None
@@ -1044,6 +1106,17 @@ def build_feedpak(
                             template['displayName'] = name
                 except Exception as e:
                     warnings.append(f'Chord-name extraction failed for {arr.name}: {e}')
+
+            if enhance_chords and chordr_analyzer is not None and idx not in drum_indices:
+                try:
+                    track_info = track_by_index.get(idx, {}) if idx is not None else {}
+                    is_bass = 'bass' in f"{arr.name} {track_info.get('name', '')}".lower()
+                    chordr_names_added += _enhance_chord_template_names(
+                        wire, chordr_analyzer, tuning=list(arr.tuning or []),
+                        capo=int(arr.capo or 0), is_bass=is_bass,
+                    )
+                except Exception as e:
+                    warnings.append(f'Chordr enhancement failed for {arr.name}: {e}')
 
             if idx is not None and idx in drum_indices:
                 try:
@@ -1379,6 +1452,7 @@ def build_feedpak(
                 'handshapes': any(
                     arr.get('handshapes') for arr in arrangement_files.values()
                 ),
+                'chordr_names': chordr_names_added,
                 'tones': any(
                     arr.get('tones') for arr in arrangement_files.values()
                 ),

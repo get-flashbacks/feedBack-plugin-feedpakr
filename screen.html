@@ -219,6 +219,14 @@
             <div id="fpr-cover-results" class="hidden gap-2"></div>
         </div>
 
+        <div class="bg-dark-700 border border-gray-800 rounded-xl p-4 mb-4">
+            <label class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
+                <input type="checkbox" id="fpr-enhance-chords" checked class="accent-blue-500">
+                Use Chordr to fill in missing chord names (optional)
+            </label>
+            <p id="fpr-chordr-status" class="text-xs text-gray-600 mt-1 ml-5">Chordr checks chart voicings and retains any names already in the source.</p>
+        </div>
+
         <div class="flex gap-3">
             <button onclick="fprBuild()"
                 class="bg-accent hover:bg-accent-light px-6 py-2.5 rounded-xl text-sm font-semibold text-white transition">

@@ -233,12 +233,14 @@ def setup(app, context):
     @app.get('/api/plugins/feedpakr/handoffs')
     async def handoffs():
         """Report which sibling plugin handoff endpoints are registered."""
-        return {
-            'handoffs': {
-                key: _route_registered(app, method, path)
-                for key, (method, path) in _HANDOFF_ROUTES.items()
-            }
+        handoffs = {
+            key: _route_registered(app, method, path)
+            for key, (method, path) in _HANDOFF_ROUTES.items()
         }
+        handoffs['chordr'] = callable(getattr(
+            getattr(app, 'state', None), 'chordr_analyze_chart_chords_v1', None
+        ))
+        return {'handoffs': handoffs}
 
     @app.post('/api/plugins/feedpakr/upload')
     async def upload_gp(data: dict):
@@ -586,6 +588,7 @@ def setup(app, context):
         combine_same_name: bool = False,
         audio_mode: str = 'midi',
         manual_offset: str = '',
+        enhance_chords: bool = False,
     ):
         """Build a .feedpak from the uploaded GP file, stream progress.
 
@@ -765,6 +768,12 @@ def setup(app, context):
                     existing_pack=existing_pack,
                     manual_offset=manual_offset_val,
                     cover_path=cover_path,
+                    enhance_chords=enhance_chords,
+                    chordr_analyzer=(
+                        getattr(getattr(app, 'state', None),
+                                'chordr_analyze_chart_chords_v1', None)
+                        if enhance_chords else None
+                    ),
                     report=_report,
                 )
 
