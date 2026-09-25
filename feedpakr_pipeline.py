@@ -164,7 +164,12 @@ def _check_extension(gp_path: str) -> None:
 def _enhance_chord_template_names(
     wire: dict, analyzer, *, tuning: list[int], capo: int, is_bass: bool,
 ) -> int:
-    """Use chordr to fill consistently identified, unnamed chord templates."""
+    """Use chordr to fill consistently identified, unnamed chord templates.
+
+    Chordr's ``resolvedNames`` is positional and returns one entry per input
+    chord event, including continuation and partial-strum events, so its
+    length must match ``chords``.
+    """
     chords = wire.get('chords') or []
     templates = wire.get('templates') or []
     if not chords or not templates:
@@ -1091,9 +1096,15 @@ def build_feedpak(
                 except Exception as e:
                     warnings.append(f'Chord-name extraction failed for {arr.name}: {e}')
 
-            if enhance_chords and chordr_analyzer is not None and idx not in drum_indices:
+            track_info = track_by_index.get(idx, {}) if idx is not None else {}
+            if (
+                enhance_chords
+                and chordr_analyzer is not None
+                and idx is not None
+                and idx not in drum_indices
+                and not track_info.get('is_piano')
+            ):
                 try:
-                    track_info = track_by_index.get(idx, {}) if idx is not None else {}
                     is_bass = 'bass' in f"{arr.name} {track_info.get('name', '')}".lower()
                     chordr_names_added += _enhance_chord_template_names(
                         wire, chordr_analyzer, tuning=list(arr.tuning or []),

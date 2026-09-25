@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chart names are retained; unavailable or failed analysis leaves the build
   intact and reports a warning.
 
+- **Chordr naming skips piano/Keys arrangements.** Their wire encoding uses
+  MIDI pitches rather than fretted positions, so passing those notes to
+  Chordr could assign incorrect chord names.
+
 - **Duplicate `.feedpak` cleanup** (issue #49). The Upgrade Library tab
   can now scan the DLC folder for `.feedpak` files with byte-identical
   archive content — e.g. the numbered copies (`Song_2.feedpak`, …) left

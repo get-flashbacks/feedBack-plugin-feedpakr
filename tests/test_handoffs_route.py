@@ -16,7 +16,6 @@ class _FakeApp:
     def __init__(self):
         self.routes = []
         self.handlers = {}
-        self.state = types.SimpleNamespace()
 
     def get(self, path):
         def deco(fn):

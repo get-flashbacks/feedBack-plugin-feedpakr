@@ -29,7 +29,7 @@ Plugin id: `feedpakr`. Install into `plugins/feedpakr/` (folder name must match 
 | Capo | **Fixed**, both source families | GP3-5 `Track.offset`; GPIF `CapoFret` property — gp2rs/gp2rs_gpx hardcode/ignore this |
 | Sections, beats | **Fixed** | `song_timeline.json`, via `song.load_song()` on the converted (playback-schedule-accurate) XML |
 | Hand shapes | **Derived**, both families | gp2rs never populates these ("empty for now") — feedpakr groups consecutive same-chord hits into contiguous spans |
-| Chord names | **Optional Chordr enhancement** | When selected during import, Chordr's shared chart-analysis bridge names unnamed templates from played voicings and carries names across partial strums; existing names are preserved |
+| Chord names | **Optional Chordr enhancement** | When selected during import, Chordr's shared chart-analysis bridge names unnamed templates from played voicings on fretted arrangements and carries names across partial strums; piano/Keys arrangements are skipped because their wire encoding uses MIDI pitches; existing names are preserved |
 | Tone changes | **Fixed** where the source has them | GPIF: read back from XML gp2rs_gpx already injects but `song.parse_arrangement` silently drops; GP3-5: scanned from every selected track's `mixTableChange`, not just the first (unlike the legacy importer this project replaces) |
 | Key signature | **New capability** | `keys.json`, GP3-5 `MeasureHeader.keySignature` / GPIF `MasterBar/Key`, spelled via the standard circle-of-fifths table |
 | Lyrics | **Fixed** (GPIF), **approximated** (GP3-5, labeled as such) | GPIF vocal track's own `<vocals>` XML (exact timing); GP3-5's single per-measure `song.lyrics` blob has no per-syllable timing to work with |
