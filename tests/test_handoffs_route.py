@@ -87,7 +87,7 @@ def test_handoffs_route_reports_registered_sibling_endpoints(monkeypatch):
 
     handler = app.handlers[('GET', '/api/plugins/feedpakr/handoffs')]
     assert asyncio.run(handler()) == {
-        'handoffs': {'preview': True, 'split': True, 'chordr': False},
+        'handoffs': {'preview': True, 'split': True},
     }
 
 
@@ -103,7 +103,7 @@ def test_handoffs_route_ignores_auxiliary_probe_endpoints(monkeypatch):
 
     handler = app.handlers[('GET', '/api/plugins/feedpakr/handoffs')]
     assert asyncio.run(handler()) == {
-        'handoffs': {'preview': False, 'split': False, 'chordr': False},
+        'handoffs': {'preview': False, 'split': False},
     }
 
 
@@ -115,7 +115,7 @@ def test_handoffs_route_reports_missing_sibling_endpoints(monkeypatch):
 
     handler = app.handlers[('GET', '/api/plugins/feedpakr/handoffs')]
     assert asyncio.run(handler()) == {
-        'handoffs': {'preview': False, 'split': False, 'chordr': False},
+        'handoffs': {'preview': False, 'split': False},
     }
 
 
@@ -174,14 +174,3 @@ def test_upload_gp_returns_error_on_parse_timeout(monkeypatch):
     assert len(entries) == 1
     assert time.monotonic() - entries[0]['ts'] < routes._UPLOAD_TTL_SECONDS
     assert not rmtree_calls, "shutil.rmtree must not be called on parse timeout"
-
-
-def test_handoffs_route_reports_chordr_chart_analysis_bridge(monkeypatch):
-    routes = _load_routes(monkeypatch)
-    app = _FakeApp()
-    app.state.chordr_analyze_chart_chords_v1 = lambda chords, **kwargs: {}
-
-    routes.setup(app, _context())
-
-    handler = app.handlers[('GET', '/api/plugins/feedpakr/handoffs')]
-    assert asyncio.run(handler())['handoffs']['chordr'] is True
