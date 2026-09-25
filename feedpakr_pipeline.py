@@ -164,16 +164,12 @@ def _check_extension(gp_path: str) -> None:
 def _enhance_chord_template_names(
     wire: dict, analyzer, *, tuning: list[int], capo: int, is_bass: bool,
 ) -> int:
-    """Fill only unnamed chord templates using chordr's shared analysis API.
-
-    Chordr returns names per chord event (including names inherited across
-    partial strums). A template is updated only when all events referring to
-    it agree on a name and the source did not already provide one.
-    """
+    """Use chordr to fill consistently identified, unnamed chord templates."""
     chords = wire.get('chords') or []
     templates = wire.get('templates') or []
     if not chords or not templates:
         return 0
+
     result = analyzer(
         chords,
         context={
@@ -184,38 +180,26 @@ def _enhance_chord_template_names(
         },
         templates=templates,
     )
-    resolved_names = result.get('resolvedNames') if isinstance(result, dict) else None
-    if not isinstance(resolved_names, list) or len(resolved_names) != len(chords):
+    names = result.get('resolvedNames') if isinstance(result, dict) else None
+    if not isinstance(names, list) or len(names) != len(chords):
         raise ValueError('Chordr returned an invalid name list')
 
-    names_by_template: dict[int, set[str]] = {}
-    for chord, name in zip(chords, resolved_names):
-        if not isinstance(chord, dict) or not isinstance(name, str) or not name.strip():
-            continue
-        try:
-            template_id = int(chord.get('id'))
-        except (TypeError, ValueError):
-            continue
-        if 0 <= template_id < len(templates):
-            names_by_template.setdefault(template_id, set()).add(name.strip())
+    by_template: dict[int, set[str]] = {}
+    for chord, name in zip(chords, names):
+        index = chord.get('id') if isinstance(chord, dict) else None
+        if (isinstance(index, int) and 0 <= index < len(templates)
+                and isinstance(name, str) and name.strip()):
+            by_template.setdefault(index, set()).add(name.strip())
 
-    updated = 0
-    for template_id, names in names_by_template.items():
-        template = templates[template_id]
-        if not isinstance(template, dict):
-            continue
-        existing_name = template.get('name')
-        if isinstance(existing_name, str) and existing_name.strip():
-            continue
-        if len(names) != 1:
-            continue
-        name = next(iter(names))
-        template['name'] = name
-        display_name = template.get('displayName')
-        if not isinstance(display_name, str) or not display_name.strip():
-            template['displayName'] = name
-        updated += 1
-    return updated
+    added = 0
+    for index, candidates in by_template.items():
+        template = templates[index]
+        if (len(candidates) == 1 and isinstance(template, dict)
+                and not template.get('name') and not template.get('displayName')):
+            name = next(iter(candidates))
+            template.update(name=name, displayName=name)
+            added += 1
+    return added
 
 
 def _manifest_arrangement_zero_has_phrases(manifest: dict, arrangement_files: dict[str, dict]) -> bool:
