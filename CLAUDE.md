@@ -196,18 +196,20 @@ is omitted, not on the shipped form) wires `chordr_analyzer` from
 `feedback-plugin-difficulty-ladder`'s `POST
 /api/plugins/difficulty_ladder/analyze-chords` route also consumes — see
 `feedback-plugin-chordr`'s `README.md`, the repo that actually registers
-the capability; neither consumer gates on a specific Chordr *plugin*
-version — both feature-detect the capability's presence. The one version
-that **is** load-bearing is baked into the capability's name itself: the
-literal `_v1` suffix in `chordr_analyze_chart_chords_v1` is chordr's own
-versioning scheme for this callable (its `README.md` calls it "the
-**versioned** `app.state.chordr_analyze_chart_chords_v1` callable"), and
-`routes.py` looks up that exact attribute with no fallback — a future
-`_v2` rename would silently surface here as `enhance_chords: true`
-degrading to a warning-and-no-op, not as an error anyone would notice)
-— `None` when Chordr isn't
-installed, in which case `enhance_chords: true` just appends a warning
-and no-ops rather than failing the whole build. **Gated to fretted tracks
+the capability) — `None` when Chordr isn't installed, in which case
+`enhance_chords: true` just appends a warning and no-ops rather than
+failing the whole build.
+
+Neither consumer gates on a specific Chordr *plugin* version — both
+feature-detect the capability's presence. The one version that **is**
+load-bearing is baked into the capability's name itself: the literal
+`_v1` suffix in `chordr_analyze_chart_chords_v1` is chordr's own
+versioning scheme for this callable (its `README.md` describes it as the
+"versioned" `app.state.chordr_analyze_chart_chords_v1(...)` callable —
+paraphrased, not a verbatim quote). `routes.py` looks up that exact
+attribute with no fallback — a future `_v2` rename would silently
+degrade `enhance_chords: true` to a warning-and-no-op here, not surface
+as an error anyone would notice. **Gated to fretted tracks
 only** (`8636fe2`) because gp2rs encodes piano/Keys wire notes as
 MIDI-bucket values (`s = midi // 24`, `f = midi % 24`), not real
 string/fret positions — Chordr would read those as fretted shapes and
