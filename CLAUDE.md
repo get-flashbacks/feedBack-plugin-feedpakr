@@ -176,6 +176,39 @@ a warp that's likely wrong for everything after the first repeat. GPIF's
 "repeats/alternate endings... GP6/7/8 import does not yet expand" warning)
 is unrelated and unaffected by this.
 
+## Optional Chordr chord-naming enhancement
+
+`build_feedpak(..., chordr_analyzer=None, enhance_chords=False)` can fill
+in names for chord templates GP left unnamed/placeholder, via
+`_enhance_chord_template_names()` in `feedpakr_pipeline.py`. `routes.py`
+wires `chordr_analyzer` from `app.state.chordr_analyze_chart_chords_v1`
+(the same capability `feedback-plugin-chordr` registers, and that
+`feedback-plugin-difficulty-ladder`'s `/group-chords` route also
+consumes — see that repo's `CLAUDE.md`) — `None` when Chordr isn't
+installed, in which case `enhance_chords: true` just appends a warning
+and no-ops rather than failing the whole build. Gated to fretted tracks
+only (`8636fe2`); the analyzer's `resolvedNames` is positional and must
+line up 1:1 with the wire `chords` array, including continuation/partial-
+strum events — this repo owns keeping that alignment correct across GP3-8
+and GPIF, Chordr just returns names for whatever list it's handed.
+
+## Duplicate `.feedpak` cleanup (issue #49)
+
+The Upgrade Library tab can scan the DLC folder for `.feedpak` files with
+byte-identical archive **content** (member-hash based, not file bytes/
+size/mtime, so re-upgrades of the same source at different times still
+match) and remove caller-selected duplicates. Removal moves files into
+`.feedpakr_trash/` inside the DLC folder rather than deleting outright.
+Each group's oldest file (the one `already_upgraded` detection keys off)
+is protected at both the UI and backend layers independently — the
+backend re-verifies extension/DLC-containment/still-a-real-duplicate at
+delete time against a fresh scan, never trusting whatever the UI last
+saw. Re-upgrading an already-upgraded `.sloppak` now takes an explicit
+`conflict_policy` (skip / replace / versioned) instead of silently
+stacking numbered duplicate `.feedpak`s — `versioned` reproduces the old
+default behavior exactly, so nothing changes unless a file is explicitly
+re-selected.
+
 ## feedpak-spec compliance (see got-feedBack/feedpak-spec)
 
 - **Manifest required keys:** `title`, `artist`, `duration`,
