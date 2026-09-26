@@ -200,8 +200,10 @@ the capability) — `None` when Chordr isn't installed, in which case
 `enhance_chords: true` just appends a warning and no-ops rather than
 failing the whole build.
 
-Neither consumer gates on a specific Chordr *plugin* version — both
-feature-detect the capability's presence. The one version that **is**
+Neither `feedback-plugin-difficulty-ladder` nor this repo (the two
+consumers of the capability, as opposed to `feedback-plugin-chordr`,
+which registers it) gates on a specific Chordr *plugin* version — both
+feature-detect the capability's presence instead. The one version that **is**
 load-bearing is baked into the capability's name itself: the literal
 `_v1` suffix in `chordr_analyze_chart_chords_v1` is chordr's own
 versioning scheme for this callable (its `README.md` describes it as the
