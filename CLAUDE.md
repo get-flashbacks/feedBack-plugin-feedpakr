@@ -193,9 +193,11 @@ the `ws_build` WebSocket request → `routes.py`'s `ws_build` handler
 is omitted, not on the shipped form) wires `chordr_analyzer` from
 `app.state.chordr_analyze_chart_chords_v1` (the same capability
 `feedback-plugin-chordr` registers, and that
-`feedback-plugin-difficulty-ladder`'s `/group-chords` route also
-consumes — see `feedback-plugin-chordr`'s `CLAUDE.md`, the repo that
-actually registers the capability) — `None` when Chordr isn't
+`feedback-plugin-difficulty-ladder`'s `POST
+/api/plugins/difficulty_ladder/analyze-chords` route also consumes — see
+`feedback-plugin-chordr`'s `README.md`, the repo that actually registers
+the capability; neither consumer gates on a specific Chordr version —
+both feature-detect the capability's presence) — `None` when Chordr isn't
 installed, in which case `enhance_chords: true` just appends a warning
 and no-ops rather than failing the whole build. **Gated to fretted tracks
 only** (`8636fe2`) because gp2rs encodes piano/Keys wire notes as
