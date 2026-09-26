@@ -179,17 +179,32 @@ is unrelated and unaffected by this.
 ## Optional Chordr chord-naming enhancement
 
 `build_feedpak(..., chordr_analyzer=None, enhance_chords=False)` can fill
-in names for chord templates GP left unnamed/placeholder, via
-`_enhance_chord_template_names()` in `feedpakr_pipeline.py`. `routes.py`
-wires `chordr_analyzer` from `app.state.chordr_analyze_chart_chords_v1`
-(the same capability `feedback-plugin-chordr` registers, and that
+in names for chord templates GP left **entirely unnamed** (both `name`
+and `displayName` blank) whose played voicings all resolve to the *same*
+identified name, via `_enhance_chord_template_names()` in
+`feedpakr_pipeline.py`. This is narrower than "unnamed/placeholder" — a
+GP auto-name like `A5` already counts as named and is never overwritten,
+and a template referenced by chord events that disagree on identity is
+left alone rather than guessed at. Reachable end-to-end via the import
+form: `screen.html`'s `#fpr-enhance-chords` checkbox (ships **checked** by
+default) → `screen.js` reads it into the `enhance_chords` query param on
+the `ws_build` WebSocket request → `routes.py`'s `ws_build` handler
+(`enhance_chords: bool = False` — the default only applies when the param
+is omitted, not on the shipped form) wires `chordr_analyzer` from
+`app.state.chordr_analyze_chart_chords_v1` (the same capability
+`feedback-plugin-chordr` registers, and that
 `feedback-plugin-difficulty-ladder`'s `/group-chords` route also
-consumes — see that repo's `CLAUDE.md`) — `None` when Chordr isn't
+consumes — see `feedback-plugin-chordr`'s `CLAUDE.md`, the repo that
+actually registers the capability) — `None` when Chordr isn't
 installed, in which case `enhance_chords: true` just appends a warning
-and no-ops rather than failing the whole build. Gated to fretted tracks
-only (`8636fe2`); the analyzer's `resolvedNames` is positional and must
-line up 1:1 with the wire `chords` array, including continuation/partial-
-strum events — this repo owns keeping that alignment correct across GP3-8
+and no-ops rather than failing the whole build. **Gated to fretted tracks
+only** (`8636fe2`) because gp2rs encodes piano/Keys wire notes as
+MIDI-bucket values (`s = midi // 24`, `f = midi % 24`), not real
+string/fret positions — Chordr would read those as fretted shapes and
+misname them, so Keys tracks are excluded rather than fed bad input. The
+analyzer's `resolvedNames` is positional and must line up 1:1 with the
+wire `chords` array, including continuation/partial-strum events — this
+repo owns keeping that alignment correct across GP3-8
 and GPIF, Chordr just returns names for whatever list it's handed.
 
 ## Duplicate `.feedpak` cleanup (issue #49)
@@ -205,8 +220,11 @@ backend re-verifies extension/DLC-containment/still-a-real-duplicate at
 delete time against a fresh scan, never trusting whatever the UI last
 saw. Re-upgrading an already-upgraded `.sloppak` now takes an explicit
 `conflict_policy` (skip / replace / versioned) instead of silently
-stacking numbered duplicate `.feedpak`s — `versioned` reproduces the old
-default behavior exactly, so nothing changes unless a file is explicitly
+stacking numbered duplicate `.feedpak`s — an unrecognized value falls
+back to `versioned` (the pre-#49 default) rather than rejecting the
+batch, matching this repo's degrade-don't-reject convention elsewhere.
+`versioned` reproduces the old default behavior exactly, so nothing
+changes unless a file is explicitly
 re-selected.
 
 ## feedpak-spec compliance (see got-feedBack/feedpak-spec)
