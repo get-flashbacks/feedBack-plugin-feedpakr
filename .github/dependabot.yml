@@ -18,7 +18,7 @@ updates:
     # Group eligible version updates after the major-version ignore above.
     # Security updates remain separate. This does not enable auto-merge.
     groups:
-      compatible-updates:
+      version-updates:
         patterns: ["*"]
 
   # Python dependencies declared in requirements.txt.
@@ -31,8 +31,6 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
-    # Group eligible version updates after the major-version ignore above.
-    # Security updates remain separate. This does not enable auto-merge.
-    groups:
-      compatible-updates:
-        patterns: ["*"]
+    # Keep range-only Python updates as individual PRs for review.
+    # Without a resolved current version, semver-major ignores cannot
+    # reliably exclude major updates for these requirements.
