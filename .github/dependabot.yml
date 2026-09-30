@@ -1,37 +1,38 @@
-# Group minor/patch version updates to limit PR noise.
-# Preserve existing schedules and major-version restrictions; no auto-merge.
 version: 2
 updates:
-- package-ecosystem: github-actions
-  directory: /
-  schedule:
-    interval: weekly
-  open-pull-requests-limit: 5
-  ignore:
-  - dependency-name: '*'
-    update-types:
-    - version-update:semver-major
-  groups:
-    minor-and-patch:
-      patterns:
-      - '*'
-      update-types:
-      - minor
-      - patch
-- package-ecosystem: pip
-  directory: /
-  schedule:
-    interval: weekly
-  open-pull-requests-limit: 5
-  versioning-strategy: increase-if-necessary
-  ignore:
-  - dependency-name: '*'
-    update-types:
-    - version-update:semver-major
-  groups:
-    minor-and-patch:
-      patterns:
-      - '*'
-      update-types:
-      - minor
-      - patch
+  # Keep GitHub Actions up to date, including SHA-pinned actions like
+  # pullfrog/pullfrog@<sha> — Dependabot resolves the SHA to the tag it
+  # corresponds to and opens a PR bumping to the new release's SHA,
+  # keeping the pin fresh without giving up commit-pinning.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    # Patch/minor updates can open PRs; major version bumps
+    # (which can change an action's inputs/outputs) still need a human
+    # to review and update the workflow.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    # Group eligible version updates after the major-version ignore above.
+    # Security updates remain separate. This does not enable auto-merge.
+    groups:
+      compatible-updates:
+        patterns: ["*"]
+
+  # Python dependencies declared in requirements.txt.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    versioning-strategy: "increase-if-necessary"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    # Group eligible version updates after the major-version ignore above.
+    # Security updates remain separate. This does not enable auto-merge.
+    groups:
+      compatible-updates:
+        patterns: ["*"]
