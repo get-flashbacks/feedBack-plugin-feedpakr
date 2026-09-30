@@ -32,5 +32,12 @@ updates:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
     # Keep range-only Python updates as individual PRs for review.
-    # Without a resolved current version, semver-major ignores cannot
-    # reliably exclude major updates for these requirements.
+    # The semver-major ignore above excludes nothing here: a range-style
+    # requirement with no lockfile has no resolved current version, so
+    # the rule is evaluated, logged, and matches nothing — a
+    # deterministic no-op, not a flaky one. Tracked upstream as
+    # dependabot/dependabot-core#10573; the fix (#13516) is closed
+    # unmerged. Only the open-ended defusedxml>=0.7.1 is exposed —
+    # jsonschema's "<5" ceiling blocks a 5.x proposal on its own under
+    # increase-if-necessary. If that fix lands, or a lockfile is added,
+    # the ignore starts holding and pip updates can be grouped again.
