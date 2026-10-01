@@ -1,2 +1,13 @@
-# Test runner; runtime and host dependencies are installed separately in CI.
-pytest==9.1.1
+# Test runner. Runtime deps live in requirements.txt; CI additionally installs
+# the feedBack host's requirements.txt, because the host-gated tests need
+# pyguitarpro/PyYAML as well (see the Tests section of README.md).
+#
+# A range, not an `==` pin: an exact pin is the only form that hands Dependabot
+# a resolved version, which silently activates its semver-major ignore (see the
+# rationale in .github/dependabot.yml). The "<10" ceiling is the major guard.
+# Two-component "9.1" also keeps the ignore a no-op, unlike ">=9.1.1".
+#
+# External binaries are not pip-installable and so cannot be declared here:
+# tests/test_upgrade.py's separated-stems mixdown test needs `ffmpeg` on PATH
+# and self-skips without it, so CI (runner image ships no ffmpeg) skips it.
+pytest>=9.1,<10

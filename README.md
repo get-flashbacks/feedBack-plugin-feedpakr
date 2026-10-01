@@ -171,8 +171,18 @@ python -m pytest -q
 
 `tests/test_pipeline.py` needs the feedBack host's `lib/` (for `guitarpro`, `gp2rs`,
 `gp2rs_gpx`, `song`) on `sys.path` — `tests/conftest.py` looks for a sibling
-`pakr/feedBack` checkout and self-skips those tests if it isn't found. Notable
-regression tests, all against real sample files:
+`pakr/feedBack` checkout and self-skips those tests if it isn't found. Those tests
+are gated on the host's own pip deps too (`pyguitarpro`, `PyYAML`), which live in
+`pakr/feedBack/requirements.txt` — add `-r ../pakr/feedBack/requirements.txt` to the
+install line above (what `tests.yml` does) to run the same set CI runs, otherwise the
+extra tests self-skip and the run is still green.
+
+One test needs an external binary: `tests/test_upgrade.py::test_extract_pack_assets_separated_stems_no_full_mix`
+runs an `ffmpeg` amix and is skipped when `ffmpeg` is not on `PATH`. Nothing installs
+it — `tests.yml` doesn't and the `ubuntu-latest` image doesn't ship it — so CI skips
+that test, and a local green run is not evidence the mixdown path works.
+
+Notable regression tests, all against real sample files:
 
 - `test_build_feedpak_extracts_all_16_sections` — "Money (J).gp5" was documented as
   losing all 16 of its section markers through the legacy sloppak pipeline; must extract
