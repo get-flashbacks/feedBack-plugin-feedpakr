@@ -21,7 +21,7 @@ updates:
       version-updates:
         patterns: ["*"]
 
-  # Python dependencies declared in requirements.txt.
+  # Python dependencies declared in requirements*.txt.
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
@@ -32,12 +32,15 @@ updates:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
     # Keep range-only Python updates as individual PRs for review.
-    # The semver-major ignore above excludes nothing here: a range-style
-    # requirement with no lockfile has no resolved current version, so
-    # the rule is evaluated, logged, and matches nothing — a
-    # deterministic no-op, not a flaky one. Tracked upstream as
-    # dependabot/dependabot-core#10573; the fix (#13516) is closed
-    # unmerged. Only the open-ended defusedxml>=0.7.1 is exposed —
-    # jsonschema's "<5" ceiling blocks a 5.x proposal on its own under
-    # increase-if-necessary. If that fix lands, or a lockfile is added,
-    # the ignore starts holding and pip updates can be grouped again.
+    # The semver-major ignore above matches nothing for pytest>=9.1,<10 or
+    # jsonschema>=4.20,<5: a range-style requirement with no lockfile has no
+    # resolved version, and neither string carries a \d+\.\d+\.\d+ for the
+    # machinery to synthesize one from — a deterministic no-op, not a flaky
+    # one. What blocks a major for those two is the upper bound itself, under
+    # increase-if-necessary. defusedxml>=0.7.1 is the exception: its inline
+    # 0.7.1 yields a synthetic version, so the ignore emits >= 1.a for it and
+    # 1.x stays hidden. An `==` pin would behave the same way, so none of
+    # these manifests use one. Tracked upstream as
+    # dependabot/dependabot-core#10573; the fix (#13516) is closed unmerged.
+    # If that fix lands, or a lockfile is added, the ignore starts holding and
+    # pip updates can be grouped again.
