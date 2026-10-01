@@ -165,17 +165,18 @@ synthesized reference stem. The command exits nonzero when an authored field is
 missing or only partially preserved; warnings remain visible separately.
 
 ```bash
-python -m pip install -r requirements.txt -r requirements-test.txt
+python -m pip install -r requirements.txt -r requirements-test.txt \
+  -r ../pakr/feedBack/requirements.txt
 python -m pytest -q
 ```
 
-`tests/test_pipeline.py` needs the feedBack host's `lib/` (for `guitarpro`, `gp2rs`,
+The third `-r` is the feedBack host's own requirements, and it is not optional.
+`tests/test_pipeline.py` needs the host's `lib/` (for `guitarpro`, `gp2rs`,
 `gp2rs_gpx`, `song`) on `sys.path` — `tests/conftest.py` looks for a sibling
-`pakr/feedBack` checkout and self-skips those tests if it isn't found. Those tests
-are gated on the host's own pip deps too (`pyguitarpro`, `PyYAML`), which live in
-`pakr/feedBack/requirements.txt` — add `-r ../pakr/feedBack/requirements.txt` to the
-install line above (what `tests.yml` does) to run the same set CI runs, otherwise the
-extra tests self-skip and the run is still green.
+`pakr/feedBack` checkout and self-skips those tests if it isn't found — and its
+pip deps (`pyguitarpro`, `PyYAML`) gate the same tests. `PyYAML` in particular is
+imported at module scope by `feedpakr_pack`, so on a host checkout that has no
+pip deps installed the whole suite fails to collect instead of skipping.
 
 One test needs an external binary: `tests/test_upgrade.py::test_extract_pack_assets_separated_stems_no_full_mix`
 runs an `ffmpeg` amix and is skipped when `ffmpeg` is not on `PATH`. Nothing installs
