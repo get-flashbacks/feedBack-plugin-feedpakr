@@ -165,8 +165,8 @@ synthesized reference stem. The command exits nonzero when an authored field is
 missing or only partially preserved; warnings remain visible separately.
 
 ```bash
-pip install jsonschema
-pytest
+python -m pip install -r requirements.txt -r requirements-test.txt
+python -m pytest -q
 ```
 
 `tests/test_pipeline.py` needs the feedBack host's `lib/` (for `guitarpro`, `gp2rs`,
