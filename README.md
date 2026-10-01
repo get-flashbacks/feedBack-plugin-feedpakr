@@ -170,13 +170,17 @@ python -m pip install -r requirements.txt -r requirements-test.txt \
 python -m pytest -q
 ```
 
-The third `-r` is the feedBack host's own requirements, and it is not optional.
+The third `-r` is the feedBack host's own requirements, and it is not optional:
+`PyYAML` is imported at module scope by `feedpakr_pack`, which `tests/conftest.py`
+imports unconditionally, so a missing `PyYAML` fails collection whether or not the
+host checkout is present. That `-r` needs a sibling `pakr/feedBack` checkout to
+exist — pip exits nonzero on a missing requirements file — so a plugin-only
+checkout installs `PyYAML` directly instead and still runs everything that
+doesn't need the host.
+
 `tests/test_pipeline.py` needs the host's `lib/` (for `guitarpro`, `gp2rs`,
 `gp2rs_gpx`, `song`) on `sys.path` — `tests/conftest.py` looks for a sibling
-`pakr/feedBack` checkout and self-skips those tests if it isn't found — and its
-pip deps (`pyguitarpro`, `PyYAML`) gate the same tests. `PyYAML` in particular is
-imported at module scope by `feedpakr_pack`, so on a host checkout that has no
-pip deps installed the whole suite fails to collect instead of skipping.
+`pakr/feedBack` checkout and self-skips those tests if it isn't found.
 
 One test needs an external binary: `tests/test_upgrade.py::test_extract_pack_assets_separated_stems_no_full_mix`
 runs an `ffmpeg` amix and is skipped when `ffmpeg` is not on `PATH`. Nothing installs
