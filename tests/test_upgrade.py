@@ -484,26 +484,51 @@ def test_extract_pack_assets_separated_stems_no_full_mix(tmp_path, monkeypatch):
     guitar_entry = next(s for s in result['stems'] if s['id'] == 'guitar')
     assert guitar_entry['name'] == 'Guitar'
     assert Path(guitar_entry['file']).read_bytes() == b'OggS-guitar'
+    vocals_entry = next(s for s in result['stems'] if s['id'] == 'vocals')
+    assert Path(vocals_entry['file']).read_bytes() == b'OggS-vocals'
     # No 'full' mixdown to reuse as the sync reference — a mixdown is built
     # from every extracted stem instead.
     assert mixed == [[s['file'] for s in result['stems']]]
     assert Path(result['sync_reference_path']).read_bytes() == b'mixed-reference'
 
 
-def _make_tiny_ogg(path: Path, frequency: int) -> bool:
-    """Write a ~0.2s mono sine-wave Ogg to `path` using the ffmpeg under
-    test. Returns False if ffmpeg can't generate one (e.g. it was built
-    without lavfi/libvorbis), so the caller can skip instead of failing on
-    an unrelated capability gap."""
+def _make_tiny_ogg(path: Path, frequency: int, seconds: float = 0.2) -> None:
+    """Write a `seconds`-long mono sine-wave Ogg to `path` using the ffmpeg
+    under test. Skips only for a genuine capability gap (no lavfi `sine`
+    filter, or no Ogg/vorbis encoder); a nonzero exit or timeout anywhere
+    else is a real failure, so a broken command cannot hide as an
+    unsupported build."""
     path.parent.mkdir(parents=True, exist_ok=True)
     cmd = ['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi',
-           '-i', f'sine=frequency={frequency}:duration=0.2',
+           '-i', f'sine=frequency={frequency}:duration={seconds}',
            '-ac', '1', '-ar', '8000', str(path)]
     try:
         result = subprocess.run(cmd, capture_output=True, timeout=60, shell=False)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0 and path.is_file() and path.stat().st_size > 0
+    except FileNotFoundError:
+        pytest.skip('ffmpeg not installed on this host')
+    except subprocess.TimeoutExpired:
+        pytest.fail('ffmpeg timed out generating a test tone')
+    if result.returncode != 0:
+        stderr = result.stderr[-300:].decode(errors='replace')
+        if any(marker in stderr for marker in (
+                'Unknown filter', 'No such filter', 'Unknown input format',
+                'Unknown encoder', 'Default encoder', 'encoder not found')):
+            pytest.skip(f'ffmpeg cannot generate a test tone: {stderr}')
+        pytest.fail(f'ffmpeg failed to generate a test tone: {stderr}')
+    assert path.is_file() and path.stat().st_size > 0, 'ffmpeg produced an empty test tone'
+
+
+def _ogg_duration_seconds(path: Path) -> float:
+    """Decode `path` to raw mono PCM with ffmpeg and time it, so a test can
+    tell a real multi-input amix (spans every stem) from a single-stem copy
+    that would otherwise look like a valid Ogg too."""
+    result = subprocess.run(
+        ['ffmpeg', '-v', 'error', '-i', str(path),
+         '-f', 's16le', '-ac', '1', '-ar', '8000', '-'],
+        capture_output=True, timeout=60, shell=False,
+    )
+    assert result.returncode == 0, result.stderr[-300:].decode(errors='replace')
+    return len(result.stdout) / (2 * 8000)
 
 
 @ffmpeg_available
@@ -519,19 +544,22 @@ def test_extract_pack_assets_separated_stems_builds_mixdown_with_valid_audio(tmp
          ], 'arrangements': []},
         {},
     )
-    if not _make_tiny_ogg(src / 'stems' / 'guitar.ogg', 440):
-        pytest.skip('ffmpeg could not generate a test tone')
-    if not _make_tiny_ogg(src / 'stems' / 'vocals.ogg', 330):
-        pytest.skip('ffmpeg could not generate a test tone')
+    _make_tiny_ogg(src / 'stems' / 'guitar.ogg', 440, seconds=0.2)
+    _make_tiny_ogg(src / 'stems' / 'vocals.ogg', 330, seconds=0.6)
 
     result = upgrade.extract_pack_assets(src, tmp_path / 'out')
 
     assert result['error'] is None
     assert result['full_mix_path'] is None
-    assert {s['id'] for s in result['stems']} == {'guitar', 'vocals'}
+    extracted = {s['id']: Path(s['file']).read_bytes() for s in result['stems']}
+    assert set(extracted) == {'guitar', 'vocals'}
+    assert extracted['guitar'] == (src / 'stems' / 'guitar.ogg').read_bytes()
+    assert extracted['vocals'] == (src / 'stems' / 'vocals.ogg').read_bytes()
     ref = Path(result['sync_reference_path'])
-    assert ref.is_file() and ref.stat().st_size > 0
     assert ref.read_bytes()[:4] == b'OggS'
+    # A real amix spans every input, so the reference runs as long as the
+    # longer (vocals) stem; copying a single stem would leave it ~0.2s.
+    assert _ogg_duration_seconds(ref) > 0.4
 
 
 @ffmpeg_available
