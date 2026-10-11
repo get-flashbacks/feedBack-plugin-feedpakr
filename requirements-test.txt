@@ -8,6 +8,7 @@
 # Two-component "9.1" also keeps the ignore a no-op, unlike ">=9.1.1".
 #
 # External binaries are not pip-installable and so cannot be declared here:
-# tests/test_upgrade.py's separated-stems mixdown test needs `ffmpeg` on PATH
-# and self-skips without it, so CI (runner image ships no ffmpeg) skips it.
+# tests/test_upgrade.py's separated-stems mixdown integration/error tests need
+# `ffmpeg` on PATH and self-skip without it, so CI (runner image ships no
+# ffmpeg) skips them; the bookkeeping test runs everywhere.
 pytest>=9.1,<10
