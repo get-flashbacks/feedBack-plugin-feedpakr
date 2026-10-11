@@ -10,6 +10,7 @@ import io
 import json
 import os
 import re
+import threading
 import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -38,6 +39,15 @@ def sanitize_stem_id_component(text: str, fallback: str = 'stem', max_len: int =
     return cleaned or fallback
 
 
+# Reservation files currently held by this process's writer threads. The
+# build/upgrade flows run in the host's executor pool (threads in one
+# process), so this is the authoritative view of which markers are live; a
+# marker on disk that isn't in here was orphaned by a writer that died
+# mid-write and is safe to reclaim.
+_active_reservations: set[Path] = set()
+_active_reservations_lock = threading.Lock()
+
+
 @contextmanager
 def reserved_output_path(out_dir: str | Path, base_name: str, ext: str = '.feedpak') -> Iterator[Path]:
     """Yield a non-colliding output path under out_dir, reserved exclusively.
@@ -50,9 +60,15 @@ def reserved_output_path(out_dir: str | Path, base_name: str, ext: str = '.feedp
     candidate is created with O_CREAT|O_EXCL, so exactly one writer can ever
     hold a given name. A candidate whose reservation file *or* final file
     already exists is skipped, and the reservation is released again when
-    the with-block exits (normally or with an exception). A stale
-    reservation file left behind by a hard crash only makes the next run
-    skip that name — it never lets two writers target the same path.
+    the with-block exits (normally or with an exception).
+
+    A reservation file left behind by a writer that died mid-write (a hard
+    crash, not a Python exception) is reclaimed on the next call instead of
+    squatting the name forever — otherwise one interrupted upgrade would
+    push every later attempt onto Song_2, Song_3, …, none of which
+    list_sloppaks recognizes as the upgrade. Live reservations are tracked
+    in-process (writers are threads in one host process), so a marker not in
+    that set is stale.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -62,13 +78,23 @@ def reserved_output_path(out_dir: str | Path, base_name: str, ext: str = '.feedp
             f'{base_name}{ext}' if n == 1 else f'{base_name}_{n}{ext}'
         )
         lock_path = out_dir / f'.{candidate.name}.reserved'
-        try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            n += 1
-            continue
-        try:
+        with _active_reservations_lock:
+            if lock_path in _active_reservations:
+                # A live writer in this process already holds this name.
+                n += 1
+                continue
+            # No live holder: a marker still on disk was orphaned by a dead
+            # writer. Clear it so the name is reusable, not squatted.
+            lock_path.unlink(missing_ok=True)
+            try:
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                # Another process holds it — treat the name as taken.
+                n += 1
+                continue
             os.close(fd)
+            _active_reservations.add(lock_path)
+        try:
             if candidate.exists():
                 # A real file occupies this name (an earlier pre-#74 output
                 # or an interrupted write) — nobody may target it now.
@@ -77,7 +103,9 @@ def reserved_output_path(out_dir: str | Path, base_name: str, ext: str = '.feedp
             yield candidate
             return
         finally:
-            lock_path.unlink(missing_ok=True)
+            with _active_reservations_lock:
+                _active_reservations.discard(lock_path)
+                lock_path.unlink(missing_ok=True)
 
 
 def arrangement_id_for(name: str, taken: set[str]) -> str:

@@ -33,6 +33,21 @@ def test_reserved_output_path_avoids_collision(tmp_path):
     assert list(tmp_path.glob('.*.reserved')) == []
 
 
+def test_reserved_output_path_reclaims_orphaned_reservation(tmp_path):
+    """A reservation file left behind by a writer that died mid-write (a
+    hard crash, not a Python exception) must not squat the base name
+    forever. Sourcery finding on #77: otherwise every later call lands on
+    Song_2, Song_3, … and list_sloppaks — which checks only the unnumbered
+    path — never sees the upgrade. A marker with no live in-process holder
+    is stale and must be reclaimed so the base name is reusable again."""
+    (tmp_path / '.Song.feedpak.reserved').write_bytes(b'')
+    with pack.reserved_output_path(tmp_path, 'Song') as p:
+        assert p.name == 'Song.feedpak'
+        p.write_bytes(b'x')
+    assert (tmp_path / 'Song.feedpak').exists()
+    assert list(tmp_path.glob('.*.reserved')) == []
+
+
 def test_reserved_output_path_distinct_names_under_concurrency(tmp_path):
     """issue #74: unique_output_path's check-then-return handed every
     concurrent writer the same path when no output file existed yet — one
