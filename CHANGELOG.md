@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.3] - 2026-10-11
 
 <!-- Add entries under Added, Changed, Deprecated, Removed, Fixed, or Security as changes land. -->
 
@@ -113,3 +113,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   song itself (e.g. `-3600` on a 3-minute song) produced a spec-valid,
   unplayable pack with no warning. `build_feedpak` now warns when
   `abs(manual_offset) > duration`. (#54)
+
+## [Unreleased]
