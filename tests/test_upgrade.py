@@ -9,6 +9,7 @@ has (c:\\Users\\PC\\Downloads\\Alll\\export) — 21/21 upgraded fully spec-valid
 import io
 import json
 import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -451,8 +452,12 @@ def test_extract_pack_assets_full_mix_only(tmp_path):
     assert result['sync_reference_path'] == result['full_mix_path']
 
 
-@ffmpeg_available
-def test_extract_pack_assets_separated_stems_no_full_mix(tmp_path):
+def test_extract_pack_assets_separated_stems_no_full_mix(tmp_path, monkeypatch):
+    """Bookkeeping: with no 'full' mixdown, every separated stem is
+    extracted and a sync reference is built from them. The mixdown
+    boundary is mocked here — this test asserts extraction bookkeeping,
+    not ffmpeg decoding; the amix path itself is covered by the
+    ffmpeg-gated tests below."""
     src = _write_sloppak_with_files(
         tmp_path,
         {'title': 'T', 'artist': 'A', 'duration': 10.0,
@@ -462,6 +467,15 @@ def test_extract_pack_assets_separated_stems_no_full_mix(tmp_path):
          ], 'arrangements': []},
         {'stems/guitar.ogg': b'OggS-guitar', 'stems/vocals.ogg': b'OggS-vocals'},
     )
+    mixed: list[list[str]] = []
+
+    def fake_mixdown(stem_paths, out_path, timeout=120):
+        mixed.append(stem_paths)
+        Path(out_path).write_bytes(b'mixed-reference')
+        return None
+
+    monkeypatch.setattr(upgrade, '_mixdown_stems', fake_mixdown)
+
     result = upgrade.extract_pack_assets(src, tmp_path / 'out')
     assert result['error'] is None
     assert result['full_mix_path'] is None
@@ -470,10 +484,117 @@ def test_extract_pack_assets_separated_stems_no_full_mix(tmp_path):
     guitar_entry = next(s for s in result['stems'] if s['id'] == 'guitar')
     assert guitar_entry['name'] == 'Guitar'
     assert Path(guitar_entry['file']).read_bytes() == b'OggS-guitar'
-    # No 'full' mixdown to reuse as the sync reference — a mixdown gets
-    # built instead (single-stem shortcut here would just copy, but with
-    # two stems this exercises the ffmpeg amix path or its failure).
-    assert result['sync_reference_path'] is not None
+    vocals_entry = next(s for s in result['stems'] if s['id'] == 'vocals')
+    assert Path(vocals_entry['file']).read_bytes() == b'OggS-vocals'
+    # No 'full' mixdown to reuse as the sync reference — a mixdown is built
+    # from every extracted stem instead.
+    assert mixed == [[s['file'] for s in result['stems']]]
+    assert Path(result['sync_reference_path']).read_bytes() == b'mixed-reference'
+
+
+def _make_tiny_ogg(path: Path, frequency: int, seconds: float = 0.2) -> None:
+    """Write a `seconds`-long mono sine-wave Ogg to `path` using the ffmpeg
+    under test. Skips only for a genuine capability gap (no lavfi `sine`
+    filter, or no Ogg/vorbis encoder); a nonzero exit or timeout anywhere
+    else is a real failure, so a broken command cannot hide as an
+    unsupported build."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = ['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi',
+           '-i', f'sine=frequency={frequency}:duration={seconds}',
+           '-ac', '1', '-ar', '8000', str(path)]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=60, shell=False)
+    except FileNotFoundError:
+        pytest.skip('ffmpeg not installed on this host')
+    except subprocess.TimeoutExpired:
+        pytest.fail('ffmpeg timed out generating a test tone')
+    if result.returncode != 0:
+        stderr = result.stderr[-300:].decode(errors='replace')
+        if any(marker in stderr for marker in (
+                'Unknown filter', 'No such filter', 'Unknown input format',
+                'Unknown encoder', 'Default encoder', 'encoder not found')):
+            pytest.skip(f'ffmpeg cannot generate a test tone: {stderr}')
+        pytest.fail(f'ffmpeg failed to generate a test tone: {stderr}')
+    assert path.is_file() and path.stat().st_size > 0, 'ffmpeg produced an empty test tone'
+
+
+def _ogg_duration_seconds(path: Path) -> float:
+    """Decode `path` to raw mono PCM with ffmpeg and time it, so a test can
+    tell a real multi-input amix (spans every stem) from a single-stem copy
+    that would otherwise look like a valid Ogg too."""
+    result = subprocess.run(
+        ['ffmpeg', '-v', 'error', '-i', str(path),
+         '-f', 's16le', '-ac', '1', '-ar', '8000', '-'],
+        capture_output=True, timeout=60, shell=False,
+    )
+    assert result.returncode == 0, result.stderr[-300:].decode(errors='replace')
+    return len(result.stdout) / (2 * 8000)
+
+
+@ffmpeg_available
+def test_extract_pack_assets_separated_stems_builds_mixdown_with_valid_audio(tmp_path):
+    """Integration: genuinely decodable stems let real ffmpeg amix build the
+    sync reference when the pack has no 'full' mixdown."""
+    src = _write_sloppak_with_files(
+        tmp_path,
+        {'title': 'T', 'artist': 'A', 'duration': 10.0,
+         'stems': [
+             {'id': 'guitar', 'file': 'stems/guitar.ogg'},
+             {'id': 'vocals', 'file': 'stems/vocals.ogg'},
+         ], 'arrangements': []},
+        {},
+    )
+    _make_tiny_ogg(src / 'stems' / 'guitar.ogg', 440, seconds=0.2)
+    _make_tiny_ogg(src / 'stems' / 'vocals.ogg', 330, seconds=0.6)
+
+    result = upgrade.extract_pack_assets(src, tmp_path / 'out')
+
+    assert result['error'] is None
+    assert result['full_mix_path'] is None
+    extracted = {s['id']: Path(s['file']).read_bytes() for s in result['stems']}
+    assert set(extracted) == {'guitar', 'vocals'}
+    assert extracted['guitar'] == (src / 'stems' / 'guitar.ogg').read_bytes()
+    assert extracted['vocals'] == (src / 'stems' / 'vocals.ogg').read_bytes()
+    ref = Path(result['sync_reference_path'])
+    assert ref.read_bytes()[:4] == b'OggS'
+    # A real amix spans every input, so the reference runs as long as the
+    # longer (vocals) stem; copying a single stem would leave it ~0.2s.
+    assert _ogg_duration_seconds(ref) > 0.4
+
+
+@pytest.mark.parametrize('corrupt_id', ['guitar', 'vocals'])
+@ffmpeg_available
+def test_extract_pack_assets_separated_stems_corrupt_audio_errors(tmp_path, corrupt_id):
+    """Corrupt-audio behavior, kept separate from the bookkeeping test: real
+    ffmpeg cannot decode placeholder bytes, so extraction must surface a
+    clear mixdown error rather than a bogus sync reference. Corrupting one
+    stem at a time (the other a real, decodable Ogg) proves every stem
+    reaches the mixdown — a fault that dropped either input would let the
+    reference build from the good stem alone."""
+    src = _write_sloppak_with_files(
+        tmp_path,
+        {'title': 'T', 'artist': 'A', 'duration': 10.0,
+         'stems': [
+             {'id': 'guitar', 'file': 'stems/guitar.ogg'},
+             {'id': 'vocals', 'file': 'stems/vocals.ogg'},
+         ], 'arrangements': []},
+        {},
+    )
+    (src / 'stems').mkdir(parents=True)
+    for stem_id, frequency in (('guitar', 440), ('vocals', 330)):
+        stem = src / 'stems' / f'{stem_id}.ogg'
+        if stem_id == corrupt_id:
+            stem.write_bytes(b'OggS-corrupt')
+        else:
+            _make_tiny_ogg(stem, frequency)
+
+    result = upgrade.extract_pack_assets(src, tmp_path / 'out')
+
+    assert result['error'] is not None
+    assert 'mixdown' in result['error'].lower()
+    # ffmpeg names the unreadable input, so the error must finger the stem we
+    # corrupted — not merely fail for some unrelated reason.
+    assert f'{corrupt_id}.ogg' in result['error']
 
 
 def test_extract_pack_assets_single_separated_stem_copies_for_sync(tmp_path):

@@ -182,10 +182,14 @@ doesn't need the host.
 `gp2rs_gpx`, `song`) on `sys.path` — `tests/conftest.py` looks for a sibling
 `pakr/feedBack` checkout and self-skips those tests if it isn't found.
 
-One test needs an external binary: `tests/test_upgrade.py::test_extract_pack_assets_separated_stems_no_full_mix`
-runs an `ffmpeg` amix and is skipped when `ffmpeg` is not on `PATH`. Nothing installs
-it — `tests.yml` doesn't and the `ubuntu-latest` image doesn't ship it — so CI skips
-that test, and a local green run is not evidence the mixdown path works.
+Two tests need an external binary: `test_extract_pack_assets_separated_stems_builds_mixdown_with_valid_audio`
+runs a real `ffmpeg` amix, and `test_extract_pack_assets_separated_stems_corrupt_audio_errors`
+checks that a failed mixdown is surfaced as an error. Both are skipped when `ffmpeg`
+is not on `PATH`. Nothing installs it — `tests.yml` doesn't and the `ubuntu-latest`
+image doesn't ship it — so CI skips them, and a local green run is not evidence the
+mixdown path works. The bookkeeping test of the same name-shape
+(`test_extract_pack_assets_separated_stems_no_full_mix`) mocks the mixdown boundary
+and so runs everywhere.
 
 Notable regression tests, all against real sample files:
 
