@@ -649,6 +649,22 @@ def setup(app, context):
             await websocket.close()
             return
 
+        # Parse notation_tracks before the upload token is consumed below:
+        # like every other parameter, a bad value must be rejected while the
+        # single-use token is still registered, or the caller can't retry
+        # with the same upload and its temp dir is orphaned (no longer in
+        # _uploads, so the TTL purger never visits it).
+        try:
+            notation_indices = None if notation_tracks == 'default' else {
+                int(value) for value in notation_tracks.split(',') if value.strip()
+            }
+        except ValueError:
+            await websocket.send_json({
+                'error': 'notation_tracks must be "default" or comma-separated integers',
+            })
+            await websocket.close()
+            return
+
         # Check for required audio dependencies upfront
         if audio_mode == 'midi':
             try:
@@ -731,16 +747,6 @@ def setup(app, context):
         disc_val = _int_or_none(disc)
         genres_list = [g.strip() for g in genres.split(',') if g.strip()]
         authors_list = [a.strip() for a in authors.split(',') if a.strip()]
-        try:
-            notation_indices = None if notation_tracks == 'default' else {
-                int(value) for value in notation_tracks.split(',') if value.strip()
-            }
-        except ValueError:
-            await websocket.send_json({
-                'error': 'notation_tracks must be "default" or comma-separated integers',
-            })
-            await websocket.close()
-            return
 
         progress_queue: asyncio.Queue = asyncio.Queue()
 
