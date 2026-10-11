@@ -45,6 +45,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An invalid `notation_tracks` value made the upload unrecoverable.**
+  `ws_build` popped the single-use upload token before parsing
+  `notation_tracks`, so a bad value returned its error only after the
+  token was already gone: the caller couldn't retry with the same upload,
+  and its temp dir was orphaned because the TTL purger only visits
+  registered uploads. Parameter validation now runs before the token is
+  consumed. (#75)
+
 - **Concurrent builds with the same song could overwrite each other's
   output.** `unique_output_path` picked a name by checking existence and
   returning it without reserving anything, so two builds (or keep-both
