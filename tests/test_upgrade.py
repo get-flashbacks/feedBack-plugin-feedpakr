@@ -562,11 +562,15 @@ def test_extract_pack_assets_separated_stems_builds_mixdown_with_valid_audio(tmp
     assert _ogg_duration_seconds(ref) > 0.4
 
 
+@pytest.mark.parametrize('corrupt_id', ['guitar', 'vocals'])
 @ffmpeg_available
-def test_extract_pack_assets_separated_stems_corrupt_audio_errors(tmp_path):
+def test_extract_pack_assets_separated_stems_corrupt_audio_errors(tmp_path, corrupt_id):
     """Corrupt-audio behavior, kept separate from the bookkeeping test: real
     ffmpeg cannot decode placeholder bytes, so extraction must surface a
-    clear mixdown error rather than a bogus sync reference."""
+    clear mixdown error rather than a bogus sync reference. Corrupting one
+    stem at a time (the other a real, decodable Ogg) proves every stem
+    reaches the mixdown — a fault that dropped either input would let the
+    reference build from the good stem alone."""
     src = _write_sloppak_with_files(
         tmp_path,
         {'title': 'T', 'artist': 'A', 'duration': 10.0,
@@ -574,13 +578,23 @@ def test_extract_pack_assets_separated_stems_corrupt_audio_errors(tmp_path):
              {'id': 'guitar', 'file': 'stems/guitar.ogg'},
              {'id': 'vocals', 'file': 'stems/vocals.ogg'},
          ], 'arrangements': []},
-        {'stems/guitar.ogg': b'OggS-guitar', 'stems/vocals.ogg': b'OggS-vocals'},
+        {},
     )
+    (src / 'stems').mkdir(parents=True)
+    for stem_id, frequency in (('guitar', 440), ('vocals', 330)):
+        stem = src / 'stems' / f'{stem_id}.ogg'
+        if stem_id == corrupt_id:
+            stem.write_bytes(b'OggS-corrupt')
+        else:
+            _make_tiny_ogg(stem, frequency)
 
     result = upgrade.extract_pack_assets(src, tmp_path / 'out')
 
     assert result['error'] is not None
     assert 'mixdown' in result['error'].lower()
+    # ffmpeg names the unreadable input, so the error must finger the stem we
+    # corrupted — not merely fail for some unrelated reason.
+    assert f'{corrupt_id}.ogg' in result['error']
 
 
 def test_extract_pack_assets_single_separated_stem_copies_for_sync(tmp_path):
