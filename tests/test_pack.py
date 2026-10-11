@@ -3,6 +3,7 @@ or host core lib required."""
 
 import io
 import json
+import threading
 import zipfile
 
 import yaml
@@ -22,12 +23,52 @@ def test_sanitize_filename_component_truncates():
     assert len(pack.sanitize_filename_component('x' * 200, max_len=10)) == 10
 
 
-def test_unique_output_path_avoids_collision(tmp_path):
-    p1 = pack.unique_output_path(tmp_path, 'Song')
-    p1.write_bytes(b'x')
-    p2 = pack.unique_output_path(tmp_path, 'Song')
+def test_reserved_output_path_avoids_collision(tmp_path):
+    with pack.reserved_output_path(tmp_path, 'Song') as p1:
+        p1.write_bytes(b'x')
+    with pack.reserved_output_path(tmp_path, 'Song') as p2:
+        p2.write_bytes(b'x')
     assert p1 != p2
     assert p2.name == 'Song_2.feedpak'
+    assert list(tmp_path.glob('.*.reserved')) == []
+
+
+def test_reserved_output_path_distinct_names_under_concurrency(tmp_path):
+    """issue #74: unique_output_path's check-then-return handed every
+    concurrent writer the same path when no output file existed yet — one
+    produced pack silently clobbered the other. The reservation must claim
+    the chosen name atomically so N writers with the same base_name each
+    land on their own path. The barrier inside the with-block makes every
+    thread hold a distinct claim before any writes, so the collision
+    window is deterministically exercised instead of racy-by-luck."""
+    n_threads = 8
+    barrier = threading.Barrier(n_threads, timeout=30)
+    errors: list[BaseException] = []
+
+    def _worker(i: int) -> None:
+        try:
+            with pack.reserved_output_path(tmp_path, 'Song') as p:
+                # Success here proves every thread claimed a distinct name.
+                barrier.wait(timeout=30)
+                p.write_bytes(f'payload-{i}'.encode())
+        except BaseException as e:  # pragma: no cover — fail loudly, never hang
+            errors.append(e)
+
+    threads = [threading.Thread(target=_worker, args=(i,)) for i in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+
+    assert not errors, errors
+    files = sorted(tmp_path.glob('Song*.feedpak'), key=str)
+    assert [p.name for p in files] == ['Song.feedpak'] + [
+        f'Song_{i}.feedpak' for i in range(2, n_threads + 1)
+    ]
+    assert {p.read_bytes() for p in files} == {
+        f'payload-{i}'.encode() for i in range(n_threads)
+    }
+    assert list(tmp_path.glob('.*.reserved')) == []
 
 
 def test_arrangement_id_for_dedups():

@@ -45,6 +45,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Concurrent builds with the same song could overwrite each other's
+  output.** `unique_output_path` picked a name by checking existence and
+  returning it without reserving anything, so two builds (or keep-both
+  upgrades) racing on the same sanitized title/artist could both select
+  the same `.feedpak`, both report success, and one write silently
+  clobber the other's. Output names are now reserved atomically (an
+  `O_CREAT|O_EXCL` reservation file is claimed for the duration of the
+  write), so concurrent writers always land on distinct names — for both
+  fresh builds and versioned keep-both upgrades. (#74)
+
 - **The Upgrade Library WebSocket accepted any path, not just
   `.sloppak`.** A request naming a `.feedpak` (or any other file) would
   reach `upgrade_sloppak()`, which was never designed to read it. Paths

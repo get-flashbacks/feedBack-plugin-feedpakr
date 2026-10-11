@@ -780,8 +780,11 @@ def setup(app, context):
                 base_name = f'{safe_t}_{safe_a}' if safe_a else safe_t
 
                 out_dir = Path(dlc) / 'feedpakr'
-                out_path = _pack.unique_output_path(out_dir, base_name)
-                out_path.write_bytes(result['bytes'])
+                # The output name is reserved exclusively so concurrent
+                # builds with the same sanitized title/artist can never
+                # select the same path and overwrite each other (issue #74).
+                with _pack.reserved_output_path(out_dir, base_name) as out_path:
+                    out_path.write_bytes(result['bytes'])
                 rel_name = (Path('feedpakr') / out_path.name).as_posix()
 
                 try:
@@ -1004,8 +1007,9 @@ def setup(app, context):
           - 'replace'   — overwrite the existing .feedpak with the fresh
                           conversion.
           - 'versioned' (default, matches pre-#49 behavior) — write a
-                          numbered copy (Song_2.feedpak, …) via
-                          unique_output_path, leaving the existing file
+                          numbered copy (Song_2.feedpak, …), reserving the
+                          name exclusively so concurrent upgrades never
+                          pick the same output, leaving the existing file
                           untouched.
         Chosen per-run by the caller (screen.js prompts for it whenever the
         selection includes an already-upgraded file); never persisted
@@ -1075,11 +1079,16 @@ def setup(app, context):
                     result = _upgrade.upgrade_sloppak(str(src_path))
                     if existing.exists() and conflict_policy == 'replace':
                         out_path = existing
+                        _atomic_write_bytes(out_path, result['bytes'])
                     else:
-                        out_path = _pack.unique_output_path(
+                        # keep-both: reserve the numbered name exclusively so
+                        # concurrent upgrades of the same .sloppak pick
+                        # distinct outputs instead of clobbering each other
+                        # (issue #74).
+                        with _pack.reserved_output_path(
                             src_path.parent, src_path.stem, ext='.feedpak',
-                        )
-                    _atomic_write_bytes(out_path, result['bytes'])
+                        ) as out_path:
+                            _atomic_write_bytes(out_path, result['bytes'])
                     rel_out = out_path.relative_to(dlc_root).as_posix()
                     try:
                         meta = _extract_meta(out_path)

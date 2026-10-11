@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import yaml
@@ -35,16 +38,46 @@ def sanitize_stem_id_component(text: str, fallback: str = 'stem', max_len: int =
     return cleaned or fallback
 
 
-def unique_output_path(out_dir: str | Path, base_name: str, ext: str = '.feedpak') -> Path:
-    """Return a non-colliding path under out_dir, appending _2, _3, … as needed."""
+@contextmanager
+def reserved_output_path(out_dir: str | Path, base_name: str, ext: str = '.feedpak') -> Iterator[Path]:
+    """Yield a non-colliding output path under out_dir, reserved exclusively.
+
+    unique_output_path's check-then-return let two concurrent writers with
+    the same base_name select the same path when neither output file existed
+    yet — the collision only materialized once both had written, so one
+    produced pack silently clobbered the other (issue #74). Here the chosen
+    name is claimed atomically: a hidden reservation file beside the
+    candidate is created with O_CREAT|O_EXCL, so exactly one writer can ever
+    hold a given name. A candidate whose reservation file *or* final file
+    already exists is skipped, and the reservation is released again when
+    the with-block exits (normally or with an exception). A stale
+    reservation file left behind by a hard crash only makes the next run
+    skip that name — it never lets two writers target the same path.
+    """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    candidate = out_dir / f'{base_name}{ext}'
-    n = 2
-    while candidate.exists():
-        candidate = out_dir / f'{base_name}_{n}{ext}'
-        n += 1
-    return candidate
+    n = 1
+    while True:
+        candidate = out_dir / (
+            f'{base_name}{ext}' if n == 1 else f'{base_name}_{n}{ext}'
+        )
+        lock_path = out_dir / f'.{candidate.name}.reserved'
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            n += 1
+            continue
+        try:
+            os.close(fd)
+            if candidate.exists():
+                # A real file occupies this name (an earlier pre-#74 output
+                # or an interrupted write) — nobody may target it now.
+                n += 1
+                continue
+            yield candidate
+            return
+        finally:
+            lock_path.unlink(missing_ok=True)
 
 
 def arrangement_id_for(name: str, taken: set[str]) -> str:

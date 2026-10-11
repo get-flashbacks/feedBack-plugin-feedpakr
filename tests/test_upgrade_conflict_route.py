@@ -12,6 +12,7 @@ import importlib
 import io
 import json
 import sys
+import threading
 import types
 import zipfile
 from pathlib import Path
@@ -182,6 +183,60 @@ def test_conflict_policy_versioned_keeps_existing_and_adds_numbered_copy(tmp_pat
     done = [m for m in ws.sent if m.get('done')]
     result = done[0]['results'][0]
     assert result['output'] == 'song_2.feedpak'
+
+
+def test_concurrent_versioned_upgrades_get_distinct_outputs(tmp_path, monkeypatch):
+    """issue #74: the keep-both ('versioned') upgrade path must reserve its
+    output name exclusively as well — two concurrent upgrades of the same
+    .sloppak that both ran unique_output_path's check-then-return would
+    pick the same name and one would silently overwrite the other instead
+    of producing two numbered copies."""
+    dlc_root = tmp_path
+    _write_sloppak(dlc_root, 'song')
+    handler = _build_handler(monkeypatch, str(dlc_root))
+    routes_mod = sys.modules['routes']
+
+    # Issue #74 also demands consistent metadata indexing: exactly one entry
+    # per distinct surviving output, never two entries sharing a rel_path.
+    indexed = []
+    routes_mod._meta_db = types.SimpleNamespace(
+        put=lambda rel_name, mtime, size, meta: indexed.append(rel_name),
+    )
+
+    ws1, ws2 = _FakeWebSocket(), _FakeWebSocket()
+
+    # Make the select-then-publish window deterministic: hold both upgrades
+    # at the publish so neither lands before the other has selected its
+    # numbered name. With the pre-fix check-then-return logic both threads
+    # would pick 'song.feedpak' and clobber it; with the exclusive
+    # reservation they hold distinct names, so the barrier passes without
+    # either touching the other's file.
+    barrier = threading.Barrier(2, timeout=30)
+    original_atomic_write = routes_mod._atomic_write_bytes
+
+    def synchronized_atomic_write(path, data):
+        barrier.wait(timeout=30)
+        return original_atomic_write(path, data)
+
+    monkeypatch.setattr(routes_mod, '_atomic_write_bytes', synchronized_atomic_write)
+
+    async def _run_upgrades():
+        await asyncio.gather(
+            _run_upgrade(handler, ws1, paths='song.sloppak', conflict_policy='versioned'),
+            _run_upgrade(handler, ws2, paths='song.sloppak', conflict_policy='versioned'),
+        )
+
+    asyncio.run(_run_upgrades())
+
+    out = sorted(dlc_root.glob('song*.feedpak'), key=str)
+    assert [p.name for p in out] == ['song.feedpak', 'song_2.feedpak']
+    dones = [m for m in ws1.sent + ws2.sent if m.get('done')]
+    assert len(dones) == 2
+    outputs = [r['output'] for d in dones for r in d['results']]
+    assert sorted(outputs) == ['song.feedpak', 'song_2.feedpak']
+    # Metadata indexing stays consistent per output — one entry per file,
+    # distinct rel_paths, nothing clobbered.
+    assert sorted(indexed) == ['song.feedpak', 'song_2.feedpak']
 
 
 def test_default_conflict_policy_matches_pre_49_versioned_behavior(tmp_path, monkeypatch):
