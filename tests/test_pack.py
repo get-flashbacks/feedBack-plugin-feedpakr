@@ -33,19 +33,15 @@ def test_reserved_output_path_avoids_collision(tmp_path):
     assert list(tmp_path.glob('.*.reserved')) == []
 
 
-def test_reserved_output_path_reclaims_orphaned_reservation(tmp_path):
-    """A reservation file left behind by a writer that died mid-write (a
-    hard crash, not a Python exception) must not squat the base name
-    forever. Sourcery finding on #77: otherwise every later call lands on
-    Song_2, Song_3, … and list_sloppaks — which checks only the unnumbered
-    path — never sees the upgrade. A marker with no live in-process holder
-    is stale and must be reclaimed so the base name is reusable again."""
+def test_reserved_output_path_ignores_leftover_marker(tmp_path):
+    """A `.reserved` marker written by an earlier version (which reserved
+    names on disk) must not squat the unnumbered name: the name is free as
+    long as no output file occupies it. Sourcery/carochacs finding on #77."""
     (tmp_path / '.Song.feedpak.reserved').write_bytes(b'')
     with pack.reserved_output_path(tmp_path, 'Song') as p:
         assert p.name == 'Song.feedpak'
         p.write_bytes(b'x')
     assert (tmp_path / 'Song.feedpak').exists()
-    assert list(tmp_path.glob('.*.reserved')) == []
 
 
 def test_reserved_output_path_distinct_names_under_concurrency(tmp_path):

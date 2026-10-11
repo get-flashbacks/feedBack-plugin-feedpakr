@@ -50,13 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returning it without reserving anything, so two builds (or keep-both
   upgrades) racing on the same sanitized title/artist could both select
   the same `.feedpak`, both report success, and one write silently
-  clobber the other's. Output names are now reserved atomically (an
-  `O_CREAT|O_EXCL` reservation file is claimed for the duration of the
-  write), so concurrent writers always land on distinct names — for both
-  fresh builds and versioned keep-both upgrades. A reservation orphaned by
-  a crash mid-write is reclaimed on the next run, so one interrupted
-  upgrade can't permanently push later attempts onto a numbered copy
-  `list_sloppaks` never recognizes. (#74)
+  clobber the other's. Each output name is now reserved for the duration of
+  its write, so concurrent writers always land on distinct names — for both
+  fresh builds and versioned keep-both upgrades. Reservations are held in
+  memory (the writers are threads in the one host process), so an interrupted
+  writer leaves no on-disk marker behind to squat the unnumbered name and push
+  later upgrades onto a numbered copy `list_sloppaks` never recognizes. (#74)
 
 - **The Upgrade Library WebSocket accepted any path, not just
   `.sloppak`.** A request naming a `.feedpak` (or any other file) would

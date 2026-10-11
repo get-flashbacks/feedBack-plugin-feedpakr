@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import re
 import threading
 import zipfile
@@ -39,36 +38,33 @@ def sanitize_stem_id_component(text: str, fallback: str = 'stem', max_len: int =
     return cleaned or fallback
 
 
-# Reservation files currently held by this process's writer threads. The
-# build/upgrade flows run in the host's executor pool (threads in one
-# process), so this is the authoritative view of which markers are live; a
-# marker on disk that isn't in here was orphaned by a writer that died
-# mid-write and is safe to reclaim.
+# Output paths currently reserved by this process's writer threads. Both
+# writers — the build flow and the keep-both upgrade flow — run in the host's
+# executor pool (threads in one process), so this is the authoritative set of
+# names in flight.
 _active_reservations: set[Path] = set()
 _active_reservations_lock = threading.Lock()
 
 
 @contextmanager
 def reserved_output_path(out_dir: str | Path, base_name: str, ext: str = '.feedpak') -> Iterator[Path]:
-    """Yield a non-colliding output path under out_dir, reserved exclusively.
+    """Yield a non-colliding output path under out_dir, reserved for the
+    duration of the with-block.
 
     unique_output_path's check-then-return let two concurrent writers with
     the same base_name select the same path when neither output file existed
     yet — the collision only materialized once both had written, so one
-    produced pack silently clobbered the other (issue #74). Here the chosen
-    name is claimed atomically: a hidden reservation file beside the
-    candidate is created with O_CREAT|O_EXCL, so exactly one writer can ever
-    hold a given name. A candidate whose reservation file *or* final file
-    already exists is skipped, and the reservation is released again when
-    the with-block exits (normally or with an exception).
+    produced pack silently clobbered the other (issue #74). Here name
+    selection is serialized and the chosen path is held in
+    _active_reservations until the with-block exits (normally or with an
+    exception), so a second writer picks the next free number instead of the
+    same path.
 
-    A reservation file left behind by a writer that died mid-write (a hard
-    crash, not a Python exception) is reclaimed on the next call instead of
-    squatting the name forever — otherwise one interrupted upgrade would
-    push every later attempt onto Song_2, Song_3, …, none of which
-    list_sloppaks recognizes as the upgrade. Live reservations are tracked
-    in-process (writers are threads in one host process), so a marker not in
-    that set is stale.
+    Reservations are process-local — matching the writers, which are threads
+    in one host process — and leave nothing on disk. An on-disk marker left
+    by an interrupted writer would squat the unnumbered name and push later
+    upgrades onto a numbered copy that list_sloppaks (which checks only the
+    unnumbered path) never recognizes.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -77,35 +73,16 @@ def reserved_output_path(out_dir: str | Path, base_name: str, ext: str = '.feedp
         candidate = out_dir / (
             f'{base_name}{ext}' if n == 1 else f'{base_name}_{n}{ext}'
         )
-        lock_path = out_dir / f'.{candidate.name}.reserved'
         with _active_reservations_lock:
-            if lock_path in _active_reservations:
-                # A live writer in this process already holds this name.
-                n += 1
-                continue
-            # No live holder: a marker still on disk was orphaned by a dead
-            # writer. Clear it so the name is reusable, not squatted.
-            lock_path.unlink(missing_ok=True)
-            try:
-                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
-                # Another process holds it — treat the name as taken.
-                n += 1
-                continue
-            os.close(fd)
-            _active_reservations.add(lock_path)
-        try:
-            if candidate.exists():
-                # A real file occupies this name (an earlier pre-#74 output
-                # or an interrupted write) — nobody may target it now.
-                n += 1
-                continue
-            yield candidate
-            return
-        finally:
-            with _active_reservations_lock:
-                _active_reservations.discard(lock_path)
-                lock_path.unlink(missing_ok=True)
+            if candidate not in _active_reservations and not candidate.exists():
+                _active_reservations.add(candidate)
+                break
+        n += 1
+    try:
+        yield candidate
+    finally:
+        with _active_reservations_lock:
+            _active_reservations.discard(candidate)
 
 
 def arrangement_id_for(name: str, taken: set[str]) -> str:
