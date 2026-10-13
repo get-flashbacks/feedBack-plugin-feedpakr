@@ -120,6 +120,31 @@ splitting, and difficulty-ladder generation work to the dedicated plugins.
 `routes.py` loads its siblings via `context['load_sibling']` (not bare imports) to avoid
 the plugin-module-name collisions that mechanism exists to prevent.
 
+### Host compatibility
+
+feedpakr calls the host's own core helpers (`gp2rs`/`song`/`sloppak`) rather than
+vendoring them, so which host can run which feature is declared and checked rather than
+assumed:
+
+- `feedpakr_compat.py` records the **tested host baseline** by exact commit
+  (`d876ded00f9254b13bf4a0587c5645a1edaccf67`). The host's `VERSION` string is not a
+  unique identifier — the same `0.3.0-alpha.1` appears on checkouts both with and
+  without `sloppak.read_member_bytes()` — so the pin stays at commit granularity until a
+  published release uniquely identifies the baseline.
+- The compatibility **matrix separates concerns**: each of the five features (GP import,
+  existing-pack reuse, upgrade, duplicate scan, output playback) lists the core
+  modules/helpers it needs, independent of the external binaries (FFmpeg/ffprobe,
+  FluidSynth, yt-dlp) and of the optional sibling plugins (song-preview, stem-splitter,
+  lyrics-sync, difficulty-ladder, Chordr). A missing binary or sibling is *not* a
+  core-version problem and isn't reported as one.
+- `GET /api/plugins/feedpakr/compat` (backend) + a banner (frontend) report each
+  feature as **available**, **degraded** (a compatible fallback covers the missing
+  helper — e.g. upgrade/duplicate-scan/lyrics-text on a host without
+  `read_member_bytes()`), or **unavailable**, with an actionable message.
+- `feedpakr_upgrade` checks for `read_member_bytes()`/`load_manifest()` explicitly and
+  falls back to its own bounded reader rather than assuming an importable `sloppak` is
+  complete.
+
 ### A note on the GPIF (.gp6/.gpx/.gp) path
 
 `gp2rs.list_tracks` / `gp2rs.convert_file` already dispatch to `gp2rs_gpx` internally

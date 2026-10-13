@@ -22,6 +22,8 @@ let _existingPackAttached = false;
 let _sloppaks = [];
 let _upgradeDone = false;
 let _handoffAvailability = { preview: null, split: null, lyricsSync: null, difficulty: null };
+let _compat = null;
+let _compatLoaded = false;
 
 function esc(s) {
     return String(s)
@@ -92,6 +94,8 @@ setTimeout(() => {
     for (const radio of document.querySelectorAll('input[name="fpr-sync-method"]')) {
         radio.addEventListener('change', fprUpdateSyncMethodUI);
     }
+
+    fprProbeCompatibility();
 }, 100);
 
 // ── File handling ─────────────────────────────────────────────────────────
@@ -582,6 +586,70 @@ function fprBuild() {
 // Sibling plugins expose same-origin REST endpoints — feedpakr only probes
 // for their presence and calls them; it never generates previews, splits
 // stems, or authors difficulty ladders itself.
+
+// ── Host compatibility (issue #66) ────────────────────────────────────────
+// /compat reports, per feature, whether the running host supports it
+// ('available'), supports it via a feedpakr fallback ('degraded'), or cannot
+// ('unavailable' / 'documented'). Unavailable features get their controls
+// disabled with the report's actionable message; degraded ones just show a
+// banner. Missing external binaries and sibling plugins are reported
+// separately from core-version problems.
+
+async function fprProbeCompatibility() {
+    if (_compatLoaded) return;
+    _compatLoaded = true;
+    try {
+        const resp = await fetch(`${API_BASE}/compat`);
+        if (!resp.ok) return;
+        _compat = await resp.json();
+    } catch (err) {
+        _compat = null;
+    }
+    fprRenderCompat();
+}
+
+function fprRenderCompat() {
+    const banner = document.getElementById('fpr-compat-banner');
+    if (!banner) return;
+    if (!_compat || !_compat.features) {
+        banner.classList.add('hidden');
+        return;
+    }
+    const notes = [];
+    for (const key of Object.keys(_compat.features)) {
+        const f = _compat.features[key];
+        if (!f || f.status === 'available' || f.status === 'documented') continue;
+        notes.push(`<strong>${esc(f.label)}:</strong> ${esc(f.message)}`);
+    }
+    if (!notes.length) {
+        banner.classList.add('hidden');
+        return;
+    }
+    banner.innerHTML = notes.join('<br>');
+    banner.classList.remove('hidden');
+    fprApplyCompatGating();
+}
+
+function fprApplyCompatGating() {
+    if (!_compat || !_compat.features) return;
+    // Fail open: only an explicit ok === false disables a control. A missing
+    // key (unexpected/older payload) must never brick the UI, since
+    // fprProbeCompatibility only runs once per page load.
+    const gpFeature = _compat.features.gp_import;
+    const gpOk = !gpFeature || gpFeature.ok !== false;
+    const dropzone = document.getElementById('fpr-dropzone');
+    const fileInput = document.getElementById('fpr-file-input');
+    if (dropzone) dropzone.style.pointerEvents = gpOk ? '' : 'none';
+    if (fileInput) fileInput.disabled = !gpOk;
+
+    const upgradeFeature = _compat.features.upgrade;
+    const upgradeOk = !upgradeFeature || upgradeFeature.ok !== false;
+    const upgradeBtn = document.getElementById('fpr-upgrade-selected');
+    if (upgradeBtn) {
+        upgradeBtn.disabled = !upgradeOk;
+        upgradeBtn.title = upgradeOk ? '' : esc(upgradeFeature.message);
+    }
+}
 
 async function fprProbeHandoffs() {
     if (_handoffAvailability.preview === null) {

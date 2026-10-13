@@ -35,6 +35,18 @@ import feedpakr_validate as validate
 FEEDPAK_VERSION = pack.FEEDPAK_VERSION
 
 
+def _sloppak_has(attr: str) -> bool:
+    """Whether the host's sloppak module provides `attr`.
+
+    Hosts import sloppak fine but may predate a given helper —
+    read_member_bytes() only landed in d876ded. Checking the attribute
+    explicitly, rather than treating any importable sloppak as complete, is
+    what lets the standalone fallbacks below cover those hosts instead of
+    raising AttributeError. See feedpakr_compat for the declared contract.
+    """
+    return sloppak_mod is not None and hasattr(sloppak_mod, attr)
+
+
 def _load_manifest_fallback(src: Path) -> dict:
     """Minimal manifest read for environments without the host's sloppak
     module (e.g. a bare test run) — mirrors sloppak.py's own _read_manifest
@@ -68,7 +80,7 @@ def _load_manifest_fallback(src: Path) -> dict:
     raise FileNotFoundError(f'manifest.yaml not found in {src}')
 
 
-def _is_safe_archive_member(name: str) -> bool:
+def _is_safe_archive_member(name: object) -> bool:
     """True if `name` is safe to use as a member path inside a zip we are
     building (or as a relative-to-src filesystem path we'll open).
 
@@ -82,7 +94,7 @@ def _is_safe_archive_member(name: str) -> bool:
     `extractall()`, a different tool, a future host version). Reject
     anything that isn't a plain, relative, forward-slash path.
     """
-    if not name or name.startswith('/') or name.startswith('\\'):
+    if not isinstance(name, str) or not name or name.startswith('/') or name.startswith('\\'):
         return False
     # Reject drive-letter / UNC-style absolute paths on Windows hosts too.
     if len(name) >= 2 and name[1] == ':':
@@ -135,10 +147,21 @@ def _read_zip_member_capped(zf: zipfile.ZipFile, rel: str) -> bytes | None:
     return b''.join(chunks)
 
 
+def _read_manifest(src: Path) -> dict:
+    """Read a pack's manifest, using the host reader only when it exists.
+
+    Falls back to the standalone bounded reader on a host whose sloppak
+    module predates load_manifest() (or has no sloppak module at all).
+    """
+    if _sloppak_has('load_manifest'):
+        return sloppak_mod.load_manifest(src)
+    return _load_manifest_fallback(src)
+
+
 def _read_member(src: Path, rel: str) -> bytes | None:
     if not _is_safe_archive_member(rel):
         return None
-    if sloppak_mod is not None:
+    if _sloppak_has('read_member_bytes'):
         return sloppak_mod.read_member_bytes(src, rel)
     if src.is_dir():
         target = (src / rel).resolve()
@@ -170,6 +193,14 @@ def read_archive_member(src: Path, rel: str) -> bytes | None:
     """Public wrapper around `_read_member` — safe (path-traversal- and
     size-capped) member read. See `list_archive_members`."""
     return _read_member(src, rel)
+
+
+def load_archive_manifest(src: Path) -> dict:
+    """Public wrapper around `_read_manifest` — reads a pack's manifest via
+    the host sloppak reader when available, else the standalone fallback.
+    Used by routes.py so a host without read_member_bytes()/load_manifest()
+    still serves the Upgrade Library and lyrics-text paths."""
+    return _read_manifest(src)
 
 
 def _section_time(entry: dict) -> float | None:
@@ -340,10 +371,7 @@ def upgrade_sloppak(sloppak_path: str) -> dict:
     manifest) — every other failure degrades into `warnings`.
     """
     src = Path(sloppak_path)
-    manifest = (
-        sloppak_mod.load_manifest(src) if sloppak_mod is not None
-        else _load_manifest_fallback(src)
-    )
+    manifest = _read_manifest(src)
     warnings: list[str] = []
 
     new_manifest = dict(manifest)
@@ -450,10 +478,7 @@ def extract_pack_assets(pack_path: str | Path, out_dir: str | Path) -> dict:
     out.mkdir(parents=True, exist_ok=True)
 
     try:
-        manifest = (
-            sloppak_mod.load_manifest(src) if sloppak_mod is not None
-            else _load_manifest_fallback(src)
-        )
+        manifest = _read_manifest(src)
     except Exception as e:
         return {'error': f'Could not read manifest: {e}'}
 

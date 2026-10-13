@@ -115,3 +115,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `abs(manual_offset) > duration`. (#54)
 
 ## [Unreleased]
+
+### Added
+
+- **Declared and probed host-core compatibility** (issue #66). feedpakr's
+  host requirements — the core Python modules/helpers each feature calls,
+  the external binaries (FFmpeg/ffprobe, FluidSynth, yt-dlp) and the
+  optional sibling plugins it hands off to — are now declared in one place
+  (`feedpakr_compat.py`) and probed at runtime, exposed via
+  `GET /api/plugins/feedpakr/compat` and surfaced in the UI as a banner
+  when a feature is unavailable or running on a fallback. The tested host
+  baseline is pinned to the exact commit
+  `d876ded00f9254b13bf4a0587c5645a1edaccf67`: the host's `VERSION` string
+  (`0.3.0-alpha.1`) is reused across checkouts that do and don't have
+  `read_member_bytes()`, so it can't identify the baseline on its own.
+  `plugin.json` gains an advisory `minHost`.
+
+### Fixed
+
+- **Upgrading on a host whose `sloppak` module predates
+  `read_member_bytes()` raised `AttributeError` instead of degrading.**
+  `feedpakr_upgrade._read_member` called `read_member_bytes` whenever the
+  `sloppak` module imported successfully, so an older host — the exact gap
+  the compatibility baseline exists to describe — failed the upgrade rather
+  than falling back to feedpakr's own bounded reader. Helper reads now check
+  for the attribute explicitly and fall back
+  (`feedpakr_upgrade._sloppak_has`); `load_manifest` gets the same
+  treatment. The `/lyrics-text` and `/sloppaks` routes read through
+  `feedpakr_upgrade`'s guarded readers instead of calling `sloppak`
+  directly, so they degrade the same way.
+
