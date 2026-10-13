@@ -106,6 +106,7 @@ _upgrade = None
 _validate = None
 _lyrics = None
 _dedupe = None
+_compat = None
 
 # GP files are binary (zip-compressed for .gpx/.gp, raw for .gp3/4/5) and
 # can run larger than a MusicXML score — 30 MB comfortably covers real-world
@@ -216,7 +217,7 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
 
 
 def setup(app, context):
-    global _get_dlc_dir, _extract_meta, _meta_db, _log, _pipeline, _pack, _audio, _upgrade, _validate, _lyrics, _dedupe
+    global _get_dlc_dir, _extract_meta, _meta_db, _log, _pipeline, _pack, _audio, _upgrade, _validate, _lyrics, _dedupe, _compat
     _get_dlc_dir = context['get_dlc_dir']
     _extract_meta = context['extract_meta']
     _meta_db = context['meta_db']
@@ -229,6 +230,7 @@ def setup(app, context):
     _validate = context['load_sibling']('feedpakr_validate')
     _lyrics = context['load_sibling']('feedpakr_lyrics')
     _dedupe = context['load_sibling']('feedpakr_dedupe')
+    _compat = context['load_sibling']('feedpakr_compat')
 
     @app.get('/api/plugins/feedpakr/handoffs')
     async def handoffs():
@@ -239,6 +241,16 @@ def setup(app, context):
                 for key, (method, path) in _HANDOFF_ROUTES.items()
             }
         }
+
+    @app.get('/api/plugins/feedpakr/compat')
+    def compatibility():
+        """Report which features this host supports, with an actionable
+        message for any that are unavailable or running on a fallback.
+
+        Core helpers (feedBack's own modules), external binaries, and
+        optional sibling plugins are reported separately — a missing binary
+        or sibling is not a core-version incompatibility."""
+        return _compat.compatibility_report()
 
     @app.post('/api/plugins/feedpakr/upload')
     async def upload_gp(data: dict):
@@ -887,14 +899,12 @@ def setup(app, context):
         if target.suffix.lower() != '.feedpak' or not target.is_file():
             return JSONResponse({'error': 'Feedpak file not found'}, 404)
 
-        # Reuse the same optional import feedpakr_upgrade already guards
-        # (host without the sloppak module installed) rather than a bare
-        # import — matches how list_sloppaks reads _upgrade.sloppak_mod.
-        sloppak_mod = _upgrade.sloppak_mod
-        if sloppak_mod is None:
-            return JSONResponse({'error': 'sloppak module not available'}, 500)
+        # Read through feedpakr_upgrade's own guarded reader rather than
+        # importing sloppak directly: it uses the host's read_member_bytes()/
+        # load_manifest() when they exist and falls back to feedpakr's
+        # standalone reader on a host that predates them (see feedpakr_compat).
         try:
-            manifest = sloppak_mod.load_manifest(target) or {}
+            manifest = _upgrade.load_archive_manifest(target) or {}
         except Exception as exc:
             _log.warning('feedpakr: manifest read failed for %r', rel, exc_info=True)
             return JSONResponse({'error': str(exc)}, 400)
@@ -902,7 +912,7 @@ def setup(app, context):
         if not lyrics_rel:
             return JSONResponse({'error': 'This pack has no lyrics'}, 404)
 
-        raw = sloppak_mod.read_member_bytes(target, lyrics_rel)
+        raw = _upgrade.read_archive_member(target, lyrics_rel)
         if raw is None:
             return JSONResponse({'error': 'lyrics.json referenced by the manifest is missing'}, 404)
         try:
@@ -933,7 +943,7 @@ def setup(app, context):
                 rel = p.relative_to(dlc_root).as_posix()
                 title, artist = '', ''
                 try:
-                    manifest = _upgrade.sloppak_mod.load_manifest(p) if _upgrade.sloppak_mod else None
+                    manifest = _upgrade.load_archive_manifest(p)
                     if manifest:
                         title = manifest.get('title', '')
                         artist = manifest.get('artist', '')

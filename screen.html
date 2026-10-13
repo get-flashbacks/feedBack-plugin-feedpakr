@@ -18,6 +18,8 @@
         </button>
     </div>
 
+    <div id="fpr-compat-banner" class="hidden mb-6 rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"></div>
+
     <div id="fpr-tab-import">
     <p class="text-gray-500 mb-2">Convert a Guitar Pro file into a playable feedpak, keeping as much of the original chart as possible.</p>
     <p class="text-xs text-gray-600 mb-8">
@@ -269,6 +271,7 @@
 
         <div class="flex gap-3 mb-4">
             <button onclick="fprUpgradeSelected()"
+                id="fpr-upgrade-selected"
                 class="bg-accent hover:bg-accent-light px-6 py-2.5 rounded-xl text-sm font-semibold text-white transition">
                 Upgrade Selected
             </button>
