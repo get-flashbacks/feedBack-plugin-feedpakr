@@ -3,6 +3,18 @@ name: custom-checks
 # Self-contained pre-merge checks. This repo is an original (not a fork), so
 # there's no upstream org tooling to depend on — these checks are inlined
 # rather than referencing a shared reusable workflow.
+#
+# Two kinds of checks live here (issue #84):
+#   * Structural checks — implemented in .github/scripts/custom_checks.py
+#     with representative pass/fail cases in tests/test_custom_checks.py.
+#     They parse real sources (AST, scoped text, git diffs) and close gaps
+#     the old text-presence versions had. Passing one still does not prove
+#     the advertised runtime behavior — static analysis can't resolve
+#     aliases or dynamically-built registrations, and nothing here runs the
+#     host app.
+#   * Heuristic text checks — marked `# Heuristic:` at their job. They
+#     grep for marker strings and are tripwires for the specific regression
+#     they were written for, never evidence the behavior works.
 
 on:
   pull_request:
@@ -14,6 +26,9 @@ env:
   PLUGIN_DIR: "."
 
 jobs:
+  # Heuristic (text-presence): a regex scan of routes.py. It proves the
+  # literal calls aren't present; it cannot see print() reached through an
+  # alias or a helper module.
   no-print-in-routes:
     runs-on: ubuntu-latest
     steps:
@@ -34,6 +49,8 @@ jobs:
           fi
           echo "OK: no print()/traceback.print_exc() in routes.py"
 
+  # Structural (data): validates server_files entries by parsing plugin.json,
+  # not by pattern-matching source text.
   safe-server-files:
     runs-on: ubuntu-latest
     steps:
@@ -56,6 +73,8 @@ jobs:
               sys.exit(1)
           print("OK: server_files entries are safe relpaths")
           PY
+
+  # Structural (AST): parses routes.py imports rather than grepping for them.
   sibling-imports-use-load-sibling:
     runs-on: ubuntu-latest
     steps:
@@ -102,6 +121,9 @@ jobs:
           print("OK: no bare imports of sibling plugin modules")
           PY
 
+  # Heuristic (regex over route registrations): anchored on decorator/
+  # add_api_route calls to avoid dict.get false positives, but a route built
+  # dynamically (e.g. assembled at runtime) would be invisible.
   routes-namespaced:
     runs-on: ubuntu-latest
     steps:
@@ -155,6 +177,12 @@ jobs:
           print(f"OK: all matched routes are namespaced under /api or /ws plugins/{pid}/")
           PY
 
+  # Structural: per-call-site AST analysis. Unlike the previous version, a
+  # run_in_executor/to_thread hint anywhere in a coroutine no longer exempts
+  # the whole function — each blocking call must itself sit in an executor
+  # call or in a nested def handed to one. Representative cases:
+  # tests/test_custom_checks.py::test_blocking_handler_* — still not a proof
+  # of loop-safety (aliases and module-level helpers stay invisible).
   blocking-handlers-use-def:
     runs-on: ubuntu-latest
     steps:
@@ -162,46 +190,30 @@ jobs:
       - name: Blocking route handlers must be plain def, not async def
         run: |
           python3 - <<'PY'
-          import ast, os, sys
+          import os, sys
 
           plugin_dir = os.environ["PLUGIN_DIR"]
+          sys.path.insert(0, os.path.join(plugin_dir, ".github", "scripts"))
+          from custom_checks import check_blocking_handlers
+
           routes_path = os.path.join(plugin_dir, "routes.py")
           if not os.path.isfile(routes_path):
               print("No routes.py — skipping")
               raise SystemExit(0)
 
           src = open(routes_path, encoding="utf-8").read()
-          tree = ast.parse(src, filename=routes_path)
-
-          BLOCKING_NAMES = {"open", "sleep", "subprocess", "requests"}
-          EXECUTOR_HINTS = ("run_in_executor", "to_thread")
-
-          bad = []
-          for node in ast.walk(tree):
-              if not isinstance(node, ast.AsyncFunctionDef):
-                  continue
-              body_src = ast.get_source_segment(src, node) or ""
-              if any(hint in body_src for hint in EXECUTOR_HINTS):
-                  continue
-              for sub in ast.walk(node):
-                  if isinstance(sub, ast.Call):
-                      fn = sub.func
-                      name = None
-                      if isinstance(fn, ast.Name):
-                          name = fn.id
-                      elif isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
-                          name = fn.value.id
-                      if name in BLOCKING_NAMES:
-                          bad.append(f"line {sub.lineno}: async def {node.name} calls {name}(...) without run_in_executor/to_thread")
-                          break
-
-          if bad:
-              for b in bad:
-                  print(f"::error file={routes_path}::{b}")
-              sys.exit(1)
+          errors = check_blocking_handlers(src, filename=routes_path)
+          for error in errors:
+              print(f"::error file={routes_path}::{error}")
+          if errors:
+              raise SystemExit(1)
           print("OK: no async handlers doing unwrapped blocking work")
           PY
 
+  # Structural policy check backed by custom_checks.functional_changes:
+  # functional = Python/JS/HTML/CSS source and schema JSON, plus any
+  # plugin.json edit beyond the version field itself. Representative cases:
+  # tests/test_custom_checks.py::test_functional_*.
   version-bumped-on-change:
     runs-on: ubuntu-latest
     steps:
@@ -220,8 +232,19 @@ jobs:
             exit 0
           fi
           DIR="$PLUGIN_DIR"
-          CHANGED=$(git diff --name-only "$BASE" HEAD -- "$DIR" || true)
-          FUNCTIONAL=$(echo "$CHANGED" | grep -E '\.(py|js|html)$' | grep -vE '(^|/)tests?/' | grep -v 'plugin\.json$' || true)
+          # Functional = Python/JS/HTML/CSS source and schema JSON, plus any
+          # plugin.json edit beyond its version field. Deliberate exemptions
+          # (tests/, .github/, docs, non-schema data, version-only manifest
+          # bumps) are documented in is_functional_path /
+          # manifest_change_is_functional.
+          FUNCTIONAL=$(BASE_SHA="$BASE" python3 - <<'PY'
+          import os, sys
+          sys.path.insert(0, os.path.join(os.environ["PLUGIN_DIR"], ".github", "scripts"))
+          from custom_checks import functional_changes
+          for path in functional_changes(os.environ["BASE_SHA"], plugin_dir=os.environ["PLUGIN_DIR"]):
+              print(path)
+          PY
+          )
           if [ -z "$FUNCTIONAL" ]; then
             echo "No functional source changed — skipping"
             exit 0
@@ -239,6 +262,9 @@ jobs:
           fi
           echo "OK: version bumped $OLD_VERSION -> $NEW_VERSION"
 
+  # Heuristic (text window): flags querySelector within 6 lines of a
+  # draw/rAF/short-interval marker; caching the element further away, or via
+  # a helper, can still pass while re-querying per frame.
   no-per-frame-dom-queries:
     runs-on: ubuntu-latest
     steps:
@@ -280,6 +306,12 @@ jobs:
           print("OK: no querySelector calls found near draw/rAF/short-interval triggers")
           PY
 
+  # Structural: the reload guard must sit within a scoped look-back window
+  # above each top-level listener/timer, not merely exist somewhere in the
+  # file — the old check let an unrelated window.__ flag satisfy every
+  # registration. Still text-based by nature (a decoupled guard would need
+  # real DOM execution to catch). Representative cases:
+  # tests/test_custom_checks.py::test_reload_guard_*.
   idempotent-top-level-guard:
     runs-on: ubuntu-latest
     steps:
@@ -287,28 +319,29 @@ jobs:
       - name: Top-level listeners/timers must be inside a reload guard
         run: |
           python3 - <<'PY'
-          import os, re, sys
+          import os, sys
 
           plugin_dir = os.environ["PLUGIN_DIR"]
+          sys.path.insert(0, os.path.join(plugin_dir, ".github", "scripts"))
+          from custom_checks import check_reload_guard
+
           js_path = os.path.join(plugin_dir, "screen.js")
           if not os.path.isfile(js_path):
               print("No screen.js — skipping")
               raise SystemExit(0)
 
           src = open(js_path, encoding="utf-8").read()
-          has_hotpath = bool(re.search(r'(window\.addEventListener|document\.addEventListener|setInterval)\s*\(', src))
-          # Guard naming varies across the org (__xInstalled, __xHooksInstalled,
-          # __feedBackDynamicDifficulty, __ddCardBadgeRegistered, ...) — no
-          # single suffix covers them, so just require *some* window.__ flag
-          # reference rather than pattern-matching a specific naming style.
-          has_guard = bool(re.search(r'window\.__\w+', src))
-
-          if has_hotpath and not has_guard:
-              print(f"::error file={js_path}::found addEventListener/setInterval but no window.__*Installed-style reload guard — screen.js can re-execute on plugin reload")
-              sys.exit(1)
+          errors = check_reload_guard(src, filename=js_path)
+          for error in errors:
+              print(f"::error file={js_path}::{error}")
+          if errors:
+              raise SystemExit(1)
           print("OK: no unguarded top-level listeners detected (or none present)")
           PY
 
+  # Heuristic (text-presence): flags an unregisterShortcut/clearShortcuts
+  # marker merely existing somewhere in the file; it cannot tell whether the
+  # cleanup actually runs on teardown.
   shortcuts-unregistered:
     runs-on: ubuntu-latest
     steps:
@@ -335,6 +368,9 @@ jobs:
           print("OK: shortcut registration has matching cleanup")
           PY
 
+  # Heuristic (text-presence): requires an isDefaultRenderer() reference
+  # somewhere once geometry calls exist; it cannot verify the calls are
+  # actually guarded by it.
   overlay-gates-on-default-renderer:
     runs-on: ubuntu-latest
     steps:
@@ -362,6 +398,9 @@ jobs:
           print("OK: geometry usage is gated on isDefaultRenderer")
           PY
 
+  # Heuristic (text-presence): requires a playerControlSlot reference
+  # somewhere once #player-controls is used; it cannot verify the mount
+  # actually goes through the slot.
   v3-mounts-via-slot:
     runs-on: ubuntu-latest
     steps:
@@ -388,6 +427,9 @@ jobs:
           print("OK: player-controls usage goes through playerControlSlot")
           PY
 
+  # Heuristic (regex presence): checks that init/draw/destroy marker names
+  # appear somewhere once the factory exists; it cannot verify they are on
+  # the returned renderer object or actually called by the host.
   setrenderer-lifecycle:
     runs-on: ubuntu-latest
     steps:
@@ -430,6 +472,10 @@ jobs:
           print("OK: setRenderer factory has the required lifecycle methods")
           PY
 
+  # Structural policy check sharing custom_checks.functional_changes with
+  # version-bumped-on-change, so both policies classify changes identically
+  # (including the documented exemptions). Representative cases:
+  # tests/test_custom_checks.py::test_functional_*.
   changelog-updated:
     runs-on: ubuntu-latest
     steps:
@@ -451,7 +497,14 @@ jobs:
             echo "No usable base commit to diff against — skipping"
             exit 0
           fi
-          FUNCTIONAL=$(git diff --name-only "$BASE" HEAD -- "$PLUGIN_DIR" | grep -E '\.(py|js|html)$' | grep -vE '(^|/)tests?/' || true)
+          FUNCTIONAL=$(BASE_SHA="$BASE" python3 - <<'PY'
+          import os, sys
+          sys.path.insert(0, os.path.join(os.environ["PLUGIN_DIR"], ".github", "scripts"))
+          from custom_checks import functional_changes
+          for path in functional_changes(os.environ["BASE_SHA"], plugin_dir=os.environ["PLUGIN_DIR"]):
+              print(path)
+          PY
+          )
           if [ -z "$FUNCTIONAL" ]; then
             echo "No functional source changed — skipping"
             exit 0
@@ -463,6 +516,12 @@ jobs:
           fi
           echo "OK: CHANGELOG.md was updated"
 
+  # Structural: a new module must be *used* by a test (import, alias, or the
+  # module-name string literal a load_sibling test double passes), not merely
+  # mentioned — the old git-grep let any occurrence of the name, even in a
+  # comment, satisfy it (issue #84). Representative cases:
+  # tests/test_custom_checks.py::test_module_reference_* /
+  # test_unreferenced_new_modules_*.
   new-modules-have-tests:
     runs-on: ubuntu-latest
     steps:
@@ -484,24 +543,23 @@ jobs:
             echo "No usable base commit to diff against — skipping"
             exit 0
           fi
-          NEW_FILES=$(git diff --name-only --diff-filter=A "$BASE" HEAD -- "$PLUGIN_DIR" | grep -E '\.py$' | grep -vE '(^|/)tests?/' || true)
-          if [ -z "$NEW_FILES" ]; then
-            echo "No new Python modules — skipping"
-            exit 0
-          fi
-          MISSING=""
-          for f in $NEW_FILES; do
-            base=$(basename "$f" .py)
-            if ! git grep -q "$base" -- tests test 2>/dev/null; then
-              MISSING="$MISSING $f"
-            fi
-          done
+          MISSING=$(BASE_SHA="$BASE" python3 - <<'PY'
+          import os, sys
+          sys.path.insert(0, os.path.join(os.environ["PLUGIN_DIR"], ".github", "scripts"))
+          from custom_checks import unreferenced_new_modules
+          for path in unreferenced_new_modules(os.environ["BASE_SHA"], plugin_dir=os.environ["PLUGIN_DIR"]):
+              print(path)
+          PY
+          )
           if [ -n "$MISSING" ]; then
             echo "::error::New modules with no test reference:$MISSING"
             exit 1
           fi
-          echo "OK: new modules are referenced from tests"
+          echo "OK: new modules are referenced from tests (or none were added)"
 
+  # Heuristic (regex scan): catches the literal secret shapes listed. It is
+  # not a secret scanner — a novel token format or a value assembled at
+  # runtime passes.
   no-hardcoded-secrets:
     runs-on: ubuntu-latest
     steps:
@@ -518,6 +576,10 @@ jobs:
           fi
           echo "OK: no hardcoded secrets found"
 
+  # Heuristic (text-presence): the required key names appearing anywhere in
+  # feedpakr_pack.py satisfies it — including in a comment — so it cannot
+  # prove assemble_manifest actually writes them. (Real coverage of manifest
+  # shape is tests/test_pack.py plus the post-build schema validation.)
   feedpak-manifest-required-keys:
     runs-on: ubuntu-latest
     steps:

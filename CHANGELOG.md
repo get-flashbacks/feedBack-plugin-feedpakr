@@ -116,6 +116,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **CI policy checks for functional changes are now structural, not
+  text-presence** (issue #84). The `blocking-handlers-use-def` and
+  `idempotent-top-level-guard` checks previously passed on any file that
+  merely contained a marker string; they now parse `routes.py` (AST) and
+  `screen.js` for the actual call sites and fail on unwrapped blocking work
+  in async handlers or unguarded top-level listeners. The functional-change
+  policy now classifies CSS, schema, and non-`version` `plugin.json` edits
+  as functional (with documented exemptions for tests, CI, and docs), and
+  is shared between the version and changelog jobs via
+  `.github/scripts/custom_checks.py` so both agree. Remaining text-presence
+  checks are labelled as heuristics, and the modified checks have
+  representative pass/fail cases in `tests/test_custom_checks.py`.
+
 ### Added
 
 - **Declared and probed host-core compatibility** (issue #66). feedpakr's
