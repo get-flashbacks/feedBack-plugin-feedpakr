@@ -51,41 +51,50 @@ thread via `run_in_executor`, streamed to the client over
   shape — `feedpakr_validate.py` wraps this for the pipeline's own
   post-build check.
 
-## PR Format
+## Repository & PR target
 
-If this plugin is a fork of a canonical upstream repo, structure PRs to
-clarify scope. It isn't one yet — `got-feedBack`'s plugin ecosystem
-(whose `feedpak-spec` and `feedBack-plugin-spec` this plugin follows) is
-the intended upstream.
+This is the canonical `get-flashbacks/feedBack-plugin-feedpakr` repository. All changes should be opened as PRs against `get-flashbacks/feedBack-plugin-feedpakr` (default branch `main`). It is not a fork of another repo — `got-feedBack`'s plugin ecosystem (`feedpak-spec` and `feedBack-plugin-spec`) provides the specifications this plugin follows. Refer to those specs for normative requirements; host implementation details are noted where they differ.
 
-### For PRs targeting this fork:
-- **Fork-specific changes** — adapt for local use, integrate with local
-  infrastructure, or experiment with features not yet upstreamed
-- **Candidate changes** — improvements that could eventually go upstream;
-  mark these clearly so maintainers can cherry-pick or fast-track them
+## Agent completion workflow
 
-### For changes intended for the canonical repo:
-- **Open the PR upstream first** — ensure alignment with the canonical
-  project's standards and roadmap
-- **Link both PRs** — reference the upstream PR in your fork PR's
-  description so reviewers see the full context
-- **Rebase after merge** — once the upstream PR merges, rebase your fork
-  onto the canonical main to avoid divergence
+Follow this single completion workflow for all agent tasks:
 
-When in doubt, ask: "Would this benefit the broader community, or is it
-specific to this deployment?" Upstream changes raise the quality bar for
-everyone.
+1. **Understand the task**: Read the task requirements and related context (issue, PR, or instructions). Check AGENTS.md for repo-specific guidance.
+2. **Plan**: Identify affected files, key changes, and verification steps. Create a concise todo list if the work spans multiple steps.
+3. **Implement**: Make minimal, focused changes that follow existing code style, naming, and patterns. Use `context['load_sibling']` for cross-module imports, `context['log']` for logging, and respect the plugin's architecture (blocking work in plain `def` handlers).
+4. **Test**: Run the test suite with `pytest` to catch regressions. Verify changes against the relevant specs when touching manifest shape or validation logic.
+5. **Lint/format**: Follow repo conventions; no separate lint command is mandated beyond what tests/checks expect (see learnings). Ensure code matches surrounding style.
+6. **Verify**: Confirm the implementation meets acceptance criteria from the task/issue. Run any targeted checks relevant to your changes.
+7. **Finalize**: Ensure working tree is clean, summarize changes, and follow the run's reporting requirements. If the task involves creating a PR, ensure it targets `get-flashbacks/feedBack-plugin-feedpakr` (default `main`).
+
+## Reproducible setup
+
+- **Dependencies**: `pip install -r requirements.txt -r requirements-test.txt`. Host libraries (`pyguitarpro`, `PyYAML`) ship with the feedBack host in deployment; for local testing, ensure they are available. Tests that require ffmpeg will self-skip if `ffmpeg` isn't on PATH (imageio-ffmpeg can provide it).
+- **Test command**: `pytest` (from repo root). Host-gated tests may skip if host `lib/` or required deps aren't present; see learnings for running with host lib on `PYTHONPATH`.
+- **Specs**: `feedpak-spec/` and `feedBack-plugin-spec/` provide normative requirements referenced in this guide.
+
+## Verification
+
+- **Tests**: Always run `pytest` after making changes. Pay attention to skip counts — a green exit with all skips means environment lacks fixtures/host deps.
+- **Validation**: When modifying manifest assembly or validation, verify against `feedpak-spec/tools/validate.py` or vendored schemas via `feedpakr_validate.py`.
+- **Behavior**: For complex changes (sync/warp, audio, GP parsing), add/adjust tests or do targeted manual checks against existing fixtures.
+
+## Optional integrations
+
+- **Chordr**: Optional chord naming during import; failures degrade gracefully and emit warnings.
+- **FFmpeg**: Required only for certain audio operations; tests gated behind availability and self-skip when missing.
 
 ## Versioning
 
-Bump `version` in `plugin.json` whenever a change is user-visible — new
-import capability, a fixed bug that affected real output, a changed UI
-flow (best-practices rule 4: bump on every release — the version is used
-for cache-busting the served JS/CSS URL, so an unbumped version means
-users keep getting stale cached files after an update). It was left at
-`0.1.0` from the very first commit through 9 subsequent commits (four
-full feature phases) before anyone noticed — don't let it go stale
-again. Patch (`0.1.x`) for fixes,
-minor (`0.x.0`) for new features, matching normal semver-during-0.x
-conventions. This is independent of `feedpak_version` (the *format*
-version) — don't conflate the two.
+Bump `version` in `plugin.json` whenever a change is user-visible — new import capability, a fixed bug that affected real output, a changed UI flow. Patch (`0.x.y` with `0.x` series) for fixes, minor (`0.x.0`) for new features, matching semver during 0.x. This is independent of `feedpak_version` (the *format* version) — don't conflate the two.
+
+## Changelog policy
+
+Document notable changes in `CHANGELOG.md` following [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Include user-visible changes under appropriate sections (Added/Changed/Fixed/Removed/Security). Link or reference issues/PRs as appropriate.
+
+## Completion criteria
+
+- All tests pass (or expected skips are documented and justified)
+- Changes meet acceptance criteria in the task/issue
+- Code follows existing conventions and plugin/feedpak specs
+- Working tree is clean; changes are minimal and focused
