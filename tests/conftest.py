@@ -76,7 +76,7 @@ def _skip_tolerated(reason: str, required: set[str]) -> bool:
         return True
     for substr, capability in _support.CAPABILITY_SKIP_SUBSTRINGS.items():
         if substr in reason:
-            return capability is None or capability not in required
+            return capability is not None and capability not in required
     return False  # unrecognized skip — surface it for review
 
 
