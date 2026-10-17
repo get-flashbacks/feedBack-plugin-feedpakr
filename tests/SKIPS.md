@@ -8,6 +8,20 @@ The rule from issue #81: a skip is only acceptable when the missing thing is
 genuinely optional. Anything that gates a **release regression** must be
 provisioned in CI and enforced there, not skipped.
 
+CI sets `FEEDPAKR_REQUIRE=host,ffmpeg` (`.github/workflows/tests.yml`). Two
+guards in `tests/conftest.py` enforce the rule, so a green run means the
+required regressions really executed:
+
+- `pytest_configure` **aborts the whole session** (exit 1) when a required
+  capability is missing at startup (host lib not importable, `ffmpeg` not on
+  `PATH`).
+- `pytest_sessionfinish` **fails the session** if any test still skipped for a
+  reason not tolerated for the required capabilities. Tolerated reasons are the
+  optional categories below plus, per capability, skips that signal *that*
+  capability's absence (`_support.CAPABILITY_SKIP_SUBSTRINGS`); an unrecognized
+  skip reason fails the run so it gets reviewed rather than hiding. Both are
+  no-ops when `FEEDPAKR_REQUIRE` is unset.
+
 ## Categories
 
 ### 1. Host core lib missing — required in CI
@@ -20,10 +34,10 @@ Files: `test_pipeline.py`, `test_real_tabs.py`, `test_portable_conversion.py`,
 
 `tests/conftest.py` adds a sibling `pakr/feedBack/lib` checkout to `sys.path`
 when present. CI checks that checkout out (`.github/workflows/tests.yml`) and
-sets `FEEDPAKR_REQUIRE=host`; `tests/conftest.py::pytest_configure` then
-**aborts the whole session** if the lib is not importable, so these tests can
-never silently skip in CI. Locally, without the sibling checkout, they skip and
-everything else still runs.
+includes `host` in `FEEDPAKR_REQUIRE`; `tests/conftest.py::pytest_configure`
+then **aborts the whole session** if the lib is not importable, so these tests
+can never silently skip in CI. Locally, without the sibling checkout, they skip
+and everything else still runs.
 
 ### 2. FFmpeg missing — required in CI
 
@@ -34,10 +48,10 @@ Files: `test_audio.py`, `test_upgrade.py`.
 
 These drive the real mixdown / transcode / auto-sync regressions, which are
 release-critical. CI installs the `ffmpeg` package (which also provides
-`ffprobe`) and sets `FEEDPAKR_REQUIRE=ffmpeg`, so a missing binary aborts the
-session. The residual skips only fire locally or on an ffmpeg build genuinely
-lacking the `lavfi` `sine` filter / Ogg encoder (a real capability gap, not a
-silent pass).
+`ffprobe`) and includes `ffmpeg` in `FEEDPAKR_REQUIRE`, so a missing binary
+aborts the session. The residual skips only fire locally or on an ffmpeg build
+genuinely lacking the `lavfi` `sine` filter / Ogg encoder (a real capability
+gap, not a silent pass).
 
 ### 3. Optional personal sample library — never required
 

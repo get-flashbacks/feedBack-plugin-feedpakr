@@ -233,10 +233,11 @@ suite (and everything else) still runs.
 
 `.github/workflows/tests.yml` checks out the host and installs `ffmpeg`, then
 sets `FEEDPAKR_REQUIRE=host,ffmpeg`. `tests/conftest.py::pytest_configure`
-**aborts the session** if any required capability is missing, so a broken
-provisioning step fails loudly instead of producing a green run full of skips.
-Locally (`FEEDPAKR_REQUIRE` unset) the same tests skip cleanly when the host lib
-or `ffmpeg` isn't installed.
+**aborts the session** if any required capability is missing, and
+`pytest_sessionfinish` **fails the run** if a required regression still skipped
+for an unexpected reason — so a broken provisioning step fails loudly instead
+of producing a green run full of skips. Locally (`FEEDPAKR_REQUIRE` unset) the
+same tests skip cleanly when the host lib or `ffmpeg` isn't installed.
 
 Two mixdown tests run a real `ffmpeg` amix
 (`test_extract_pack_assets_separated_stems_builds_mixdown_with_valid_audio`,

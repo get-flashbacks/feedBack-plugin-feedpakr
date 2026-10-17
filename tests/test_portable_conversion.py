@@ -139,6 +139,14 @@ def test_gp345_chord_occurrences_match_their_templates(gp345_path):
         arr = _read_json(zf, 'arrangements/lead.json')
     assert _assert_chords_match_templates(arr, 'gp345') >= 1
     assert len(arr['chords']) == len(fixtures.GP345_LEAD_CHORDS)
+    # Pin the actual fret shapes (not just template self-consistency) so a
+    # systematic GP3-5 string/fret misread can't pass while staying internally
+    # consistent. The authored shapes are the oracle.
+    shapes = tuple(
+        tuple(sorted((n['s'], n['f']) for n in c['notes']))
+        for c in arr['chords']
+    )
+    assert shapes == fixtures.GP345_EXPECTED_CHORD_SHAPES
 
 
 def test_gp345_repeated_chord_shape_reuses_one_template(gp345_path):
@@ -160,13 +168,21 @@ def test_gp345_drums_become_drum_tab(gp345_path):
         drum_tab = _read_json(zf, 'drum_tab_drums.json')
     drum_arrs = [a for a in manifest['arrangements'] if a.get('type') == 'drums']
     assert len(drum_arrs) == 1
-    pieces = {hit['p'] for hit in drum_tab['hits']}
-    assert pieces == set(fixtures.GP345_DRUM_PIECE_NAMES)
-    assert len(drum_tab['hits']) == len(fixtures.GP345_DRUM_HITS)
+    # Pin the MIDI→piece mapping, the hit order/times, and the display names
+    # (not just the set of pieces) so a kick/snare swap or a dropped/duplicated
+    # hit can't pass.
+    hits = [(hit['t'], hit['p']) for hit in drum_tab['hits']]
+    assert hits == [(0.0, 'kick'), (2.0, 'snare'), (4.0, 'kick')]
+    kit = {piece['id']: piece['name'] for piece in drum_tab['kit']}
+    assert kit == fixtures.GP345_DRUM_PIECE_NAMES
 
 
 # ── Format dispatch ───────────────────────────────────────────────────────
 
 def test_format_detection_differs_between_gpif_and_gp345(gpif_path, gp345_path):
+    """`parse_gp` routes by file extension (``.gp``/`.gp*/`), not by sniffing
+    content, so this only asserts the two extensions take different parsers.
+    What each path actually *produces* is pinned by the format-specific tests
+    above — this is the routing smoke test, not the behavioral oracle."""
     assert pipeline.parse_gp(gpif_path)['format'] == 'gpif'
     assert pipeline.parse_gp(gp345_path)['format'] == 'gp345'

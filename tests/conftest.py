@@ -53,3 +53,56 @@ def pytest_configure(config):
             + '; '.join(missing),
             returncode=1,
         )
+
+
+_skipped: list[tuple[str, str]] = []
+
+
+def pytest_runtest_logreport(report):
+    # Record every skip so pytest_sessionfinish can refuse the ones that a
+    # required-capability run shouldn't tolerate (e.g. ffmpeg present but
+    # lacking the lavfi/vorbis filters the mixdown tests need, or a host
+    # sub-module the coarse 3-symbol check above didn't probe).
+    if report.skipped:
+        longrepr = report.longrepr
+        if isinstance(longrepr, tuple) and len(longrepr) >= 3:
+            reason = str(longrepr[2])
+        else:
+            reason = str(longrepr)
+        _skipped.append((report.nodeid, reason))
+
+
+def _skip_tolerated(reason: str, required: set[str]) -> bool:
+    if any(token in reason for token in _support.OPTIONAL_SKIP_SUBSTRINGS):
+        return True
+    for substr, capability in _support.CAPABILITY_SKIP_SUBSTRINGS.items():
+        if substr in reason:
+            return capability is None or capability not in required
+    return False  # unrecognized skip — surface it for review
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Turn any non-allowlisted skip into a failure when capabilities are
+    required, so a skipped regression can never look like a green CI run."""
+    required = _support.required_capabilities()
+    if not required:
+        return
+    unexpected = [
+        (node, reason) for node, reason in _skipped
+        if not _skip_tolerated(reason, required)
+    ]
+    if not unexpected:
+        return
+    session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    terminalreporter = session.config.pluginmanager.get_plugin('terminalreporter')
+    if terminalreporter is not None:
+        terminalreporter.write_sep(
+            '=', 'ERROR: unexpected skips in a required-capability run',
+        )
+        terminalreporter.write_line(
+            _support.REQUIRE_ENV + ' is set, but these tests skipped for reasons not '
+            'tolerated for the required capabilities — provision the capability or '
+            'update _support.CAPABILITY_SKIP_SUBSTRINGS / OPTIONAL_SKIP_SUBSTRINGS:',
+        )
+        for node, reason in unexpected:
+            terminalreporter.write_line(f'  {node}: {reason}')

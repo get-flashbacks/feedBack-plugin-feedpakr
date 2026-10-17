@@ -13,14 +13,13 @@ Two kinds of configuration live here:
   so a missing capability fails the run loudly instead of letting the
   essential regressions skip silently. ``tests/conftest.py`` enforces this.
 
-Kept import-light (``os``/``shutil``/``pathlib`` only) so `conftest.py` and
-individual test modules can import it without pulling in the host lib.
+Kept import-light (``os``/``pathlib`` only) so `conftest.py` and individual
+test modules can import it without pulling in the host lib.
 """
 
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 
 #: Env var pointing at the optional personal sample library.
@@ -38,6 +37,33 @@ LOCAL_FIXTURE_SKIP_REASON = (
     'optional personal sample library not configured '
     f'(set {LOCAL_FIXTURES_ENV}=/path/to/samples)'
 )
+
+#: Substrings of skip reasons that are always acceptable, even in a
+#: ``FEEDPAKR_REQUIRE`` run: the missing thing is genuinely optional, or the
+#: test's own subject can't be constructed. ``tests/conftest.py`` fails the
+#: session on any other skip once a capability is required, so a required
+#: regression can't hide as a green skip.
+OPTIONAL_SKIP_SUBSTRINGS = (
+    LOCAL_FIXTURE_SKIP_REASON,
+    'not a known-affected fixture',
+    'synthetic pyguitarpro Song has no attachable beats',
+)
+
+#: Skip-reason substring -> the capability (as named in ``FEEDPAKR_REQUIRE``)
+#: whose absence the skip signals. Such a skip is tolerated only while that
+#: capability is *not* required; ``None`` means the skip is never tolerated in
+#: a required-capability run. A skip matching neither this map nor
+#: :data:`OPTIONAL_SKIP_SUBSTRINGS` is treated as unexpected and fails the run.
+CAPABILITY_SKIP_SUBSTRINGS = {
+    'feedBack host core lib not on sys.path': 'host',
+    'song module not on sys.path': 'host',
+    'gp_autosync not on sys.path': 'host',
+    'pyguitarpro not installed': 'host',
+    'jsonschema not installed': None,
+    'ffmpeg not installed': 'ffmpeg',
+    'ffmpeg not available': 'ffmpeg',
+    'ffmpeg cannot generate a test tone': 'ffmpeg',
+}
 
 
 def local_fixtures_dir() -> Path | None:
@@ -65,19 +91,6 @@ def local_fixtures_root() -> Path:
     check (the path simply won't exist).
     """
     return local_fixtures_dir() or DEFAULT_LOCAL_FIXTURES
-
-
-def local_fixture(*parts: str) -> Path | None:
-    """Return ``local_fixtures_dir()/parts`` when the root exists, else ``None``."""
-    root = local_fixtures_dir()
-    if root is None:
-        return None
-    return root.joinpath(*parts)
-
-
-def ffmpeg_available() -> bool:
-    """True when an ``ffmpeg`` executable is on ``PATH``."""
-    return shutil.which('ffmpeg') is not None
 
 
 def required_capabilities() -> set[str]:

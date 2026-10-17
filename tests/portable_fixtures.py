@@ -94,6 +94,13 @@ GP345_LEAD_CHORDS = (
     ((1, 5), (2, 4)),
     ((1, 3), (2, 2)),  # repeats the first shape on purpose → template reuse
 )
+#: The fret shapes as they appear in the arrangement JSON. pyguitarpro numbers
+#: strings 1-based from the *high* E (string 1 = value 64), while feedpakr's
+#: ``s`` index is 0-based from the low string, so ``s = 6 - string``.
+GP345_EXPECTED_CHORD_SHAPES = tuple(
+    tuple(sorted((6 - string, fret) for string, fret in shape))
+    for shape in GP345_LEAD_CHORDS
+)
 GP345_DRUM_HITS = (36, 38, 36)  # kick, snare, kick (see lib/drums.midi_to_piece)
 GP345_DRUM_PIECE_NAMES = {'kick': 'Kick', 'snare': 'Snare'}
 
@@ -101,8 +108,10 @@ GP345_DRUM_PIECE_NAMES = {'kick': 'Kick', 'snare': 'Snare'}
 def write_gpif_fixture(path: Path) -> Path:
     """Write the GP7/8-style GPIF fixture (a zip with ``Content/score.gpif``)."""
     path = Path(path)
+    # Fixed member timestamp so the bytes are reproducible across runs.
+    info = zipfile.ZipInfo('Content/score.gpif', date_time=(1980, 1, 1, 0, 0, 0))
     with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr('Content/score.gpif', GPIF_XML)
+        zf.writestr(info, GPIF_XML)
     return path
 
 
@@ -115,7 +124,10 @@ def write_gp345_fixture(path: Path) -> Path:
     song.title = 'Portable GP4 Fixture'
     song.artist = 'feedpakr CI'
 
-    for _ in range(len(GP345_SECTIONS)):
+    # Song() already starts with one measure; add one per remaining section so
+    # the fixture has exactly one (marked) measure per section — no trailing
+    # unnamed measure.
+    for _ in range(len(GP345_SECTIONS) - 1):
         song.newMeasure()
     for header, title in zip(song.measureHeaders, GP345_SECTIONS):
         header.marker = guitarpro.Marker(title)
