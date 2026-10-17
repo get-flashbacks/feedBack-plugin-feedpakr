@@ -1,17 +1,20 @@
 """Tests for feedpakr_pipeline.py. Needs the feedBack host core lib
-(guitarpro, gp2rs, song, gp2midi) on sys.path — see conftest.py — and,
-for the fixture-backed tests, the c:\\Users\\PC\\Downloads\\Alll sample
-folder. Both self-skip cleanly when unavailable rather than false-failing
-in an environment that only has this one repo checked out.
+(guitarpro, gp2rs, song, gp2midi) on sys.path — see conftest.py. The
+fixture-backed tests need the optional personal sample library
+(``FEEDPAKR_LOCAL_FIXTURES``, defaulting to the historical
+``c:\\Users\\PC\\Downloads\\Alll`` folder). Both self-skip cleanly when
+unavailable rather than false-failing in an environment that only has this
+repo checked out; see tests/SKIPS.md. The portable, always-available
+conversion regressions live in tests/test_portable_conversion.py.
 """
 
 import types
-from pathlib import Path
 
 import pytest
 import yaml
 
 import feedpakr_pipeline as pipeline
+from _support import LOCAL_FIXTURE_SKIP_REASON, local_fixtures_root
 
 HOST_AVAILABLE = (
     pipeline.guitarpro is not None
@@ -23,14 +26,14 @@ pytestmark = pytest.mark.skipif(
     not HOST_AVAILABLE, reason='feedBack host core lib not on sys.path'
 )
 
-FIXTURE_DIR = Path(r'c:\Users\PC\Downloads\Alll')
+FIXTURE_DIR = local_fixtures_root()
 MONEY_GP5 = FIXTURE_DIR / 'Money (J).gp5'
 MONEY_GP8 = FIXTURE_DIR / 'Money (J).gp'
 fixture_available = pytest.mark.skipif(
-    not MONEY_GP5.is_file(), reason='sample fixture not present on this machine'
+    not MONEY_GP5.is_file(), reason=f'Money GP5: {LOCAL_FIXTURE_SKIP_REASON}'
 )
 gp8_fixture_available = pytest.mark.skipif(
-    not MONEY_GP8.is_file(), reason='GP8 sample fixture not present on this machine'
+    not MONEY_GP8.is_file(), reason=f'Money GP8: {LOCAL_FIXTURE_SKIP_REASON}'
 )
 
 
@@ -573,7 +576,7 @@ def test_gpif_capo_lookup_reads_capo_fret():
     does, rather than only asserting an empty dict."""
     capo_path = FIXTURE_DIR / 'Three Days Grace-Animal I Have Become (Standard Tuning)-10-03-2024.gp'
     if not capo_path.is_file():
-        pytest.skip('capo sample fixture not present on this machine')
+        pytest.skip(f'capo fixture: {LOCAL_FIXTURE_SKIP_REASON}')
     capo = pipeline._gpif_capo_lookup(str(capo_path))
     assert capo.get(6) == 2
 

@@ -11,6 +11,14 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    env:
+      # The host core lib is checked out below and the ffmpeg package is
+      # installed below, so the essential conversion/mixdown regressions must
+      # run — never silently skip for lack of a capability. tests/conftest.py
+      # aborts the session with a clear message if any required capability is
+      # missing, so a broken provisioning step fails CI loudly instead of
+      # turning into a green run full of skips.
+      FEEDPAKR_REQUIRE: host,ffmpeg
     steps:
       - name: Check out feedpakr
         uses: actions/checkout@v4
@@ -38,6 +46,13 @@ jobs:
           -r feedBack-plugin-feedpakr/requirements-test.txt
           -r feedBack-plugin-feedpakr/requirements.txt
           -r pakr/feedBack/requirements.txt
+      - name: Install ffmpeg
+        # Drives the real mixdown/transcode/auto-sync regressions in
+        # test_audio.py and test_upgrade.py. Provides ffprobe too, which
+        # feedpakr_audio.get_audio_duration shells out to.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Run tests
         working-directory: feedBack-plugin-feedpakr
-        run: python -m pytest -q
+        # -ra (also set in pytest.ini) prints the short test summary so every
+        # skip reason is visible in the CI log.
+        run: python -m pytest -q -ra

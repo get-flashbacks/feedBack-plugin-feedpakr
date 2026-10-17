@@ -3,12 +3,12 @@
 Synthetic dir-form sloppaks (built with tmp_path) cover the logic in
 isolation; a handful of real-fixture regression tests at the bottom lock
 in what was verified manually against every sample sloppak this project
-has (c:\\Users\\PC\\Downloads\\Alll\\export) — 21/21 upgraded fully spec-valid.
+has (the optional personal library's ``export`` folder, configured via
+``FEEDPAKR_LOCAL_FIXTURES``) — 21/21 upgraded fully spec-valid.
 """
 
 import io
 import json
-import shutil
 import subprocess
 import zipfile
 from pathlib import Path
@@ -18,9 +18,13 @@ import yaml
 
 import feedpakr_upgrade as upgrade
 import feedpakr_validate as validate
+from _support import LOCAL_FIXTURE_SKIP_REASON, ffmpeg_available, local_fixtures_root
 
-ffmpeg_available = pytest.mark.skipif(
-    shutil.which('ffmpeg') is None, reason='ffmpeg not installed on this host'
+# CI installs ffmpeg and sets FEEDPAKR_REQUIRE=ffmpeg, so these tests run
+# there; conftest.py aborts the session if the required binary is missing.
+ffmpeg_required = pytest.mark.skipif(
+    not ffmpeg_available(),
+    reason='ffmpeg not installed on this host (optional)',
 )
 
 
@@ -531,7 +535,7 @@ def _ogg_duration_seconds(path: Path) -> float:
     return len(result.stdout) / (2 * 8000)
 
 
-@ffmpeg_available
+@ffmpeg_required
 def test_extract_pack_assets_separated_stems_builds_mixdown_with_valid_audio(tmp_path):
     """Integration: genuinely decodable stems let real ffmpeg amix build the
     sync reference when the pack has no 'full' mixdown."""
@@ -563,7 +567,7 @@ def test_extract_pack_assets_separated_stems_builds_mixdown_with_valid_audio(tmp
 
 
 @pytest.mark.parametrize('corrupt_id', ['guitar', 'vocals'])
-@ffmpeg_available
+@ffmpeg_required
 def test_extract_pack_assets_separated_stems_corrupt_audio_errors(tmp_path, corrupt_id):
     """Corrupt-audio behavior, kept separate from the bookkeeping test: real
     ffmpeg cannot decode placeholder bytes, so extraction must surface a
@@ -793,9 +797,9 @@ def test_extract_pack_assets_warns_when_declared_stem_cannot_be_read(tmp_path):
 
 # ── Real-fixture regression (the actual sample library) ────────────────────
 
-FIXTURE_DIR = Path(r'c:\Users\PC\Downloads\Alll\export')
+FIXTURE_DIR = local_fixtures_root() / 'export'
 fixture_available = pytest.mark.skipif(
-    not FIXTURE_DIR.is_dir(), reason='sample sloppak library not present on this machine'
+    not FIXTURE_DIR.is_dir(), reason=f'sample sloppak library: {LOCAL_FIXTURE_SKIP_REASON}'
 )
 
 
@@ -803,7 +807,7 @@ fixture_available = pytest.mark.skipif(
 def test_real_fixture_money_v2_ends_up_fully_valid():
     p = FIXTURE_DIR / 'Money_Pink Floyd_v2.sloppak'
     if not p.is_file():
-        pytest.skip('fixture not present')
+        pytest.skip(LOCAL_FIXTURE_SKIP_REASON)
     result = upgrade.upgrade_sloppak(str(p))
     assert result['validation'] == {}
     assert any('song_timeline' in w for w in result['warnings'])
@@ -814,7 +818,7 @@ def test_real_fixture_money_v2_ends_up_fully_valid():
 def test_real_fixture_amy_winehouse_v2_no_full_mix_honestly_reported():
     p = FIXTURE_DIR / 'sloppak' / 'Amy-Winehouse_Rehab_v2.sloppak'
     if not p.is_file():
-        pytest.skip('fixture not present')
+        pytest.skip(LOCAL_FIXTURE_SKIP_REASON)
     result = upgrade.upgrade_sloppak(str(p))
     assert any('no complete mix' in w for w in result['warnings'])
     assert not result['validation']  # no full mix isn't a schema error — a permissible library shape
@@ -826,7 +830,7 @@ def test_real_fixture_batch_all_fully_valid():
     project has upgrades to a fully spec-valid .feedpak."""
     paths = [p for p in FIXTURE_DIR.rglob('*.sloppak') if not p.name.endswith('.bak')]
     if not paths:
-        pytest.skip('no sloppak fixtures found')
+        pytest.skip(LOCAL_FIXTURE_SKIP_REASON)
     failures = []
     for p in paths:
         result = upgrade.upgrade_sloppak(str(p))
