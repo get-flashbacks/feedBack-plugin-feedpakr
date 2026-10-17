@@ -9,7 +9,6 @@ has (the optional personal library's ``export`` folder, configured via
 
 import io
 import json
-import shutil
 import subprocess
 import zipfile
 from pathlib import Path
@@ -19,12 +18,12 @@ import yaml
 
 import feedpakr_upgrade as upgrade
 import feedpakr_validate as validate
-from _support import LOCAL_FIXTURE_SKIP_REASON, local_fixtures_root
+from _support import LOCAL_FIXTURE_SKIP_REASON, ffmpeg_available, local_fixtures_root
 
 # CI installs ffmpeg and sets FEEDPAKR_REQUIRE=ffmpeg, so these tests run
 # there; conftest.py aborts the session if the required binary is missing.
-ffmpeg_available = pytest.mark.skipif(
-    shutil.which('ffmpeg') is None,
+ffmpeg_required = pytest.mark.skipif(
+    not ffmpeg_available(),
     reason='ffmpeg not installed on this host (optional)',
 )
 
@@ -536,7 +535,7 @@ def _ogg_duration_seconds(path: Path) -> float:
     return len(result.stdout) / (2 * 8000)
 
 
-@ffmpeg_available
+@ffmpeg_required
 def test_extract_pack_assets_separated_stems_builds_mixdown_with_valid_audio(tmp_path):
     """Integration: genuinely decodable stems let real ffmpeg amix build the
     sync reference when the pack has no 'full' mixdown."""
@@ -568,7 +567,7 @@ def test_extract_pack_assets_separated_stems_builds_mixdown_with_valid_audio(tmp
 
 
 @pytest.mark.parametrize('corrupt_id', ['guitar', 'vocals'])
-@ffmpeg_available
+@ffmpeg_required
 def test_extract_pack_assets_separated_stems_corrupt_audio_errors(tmp_path, corrupt_id):
     """Corrupt-audio behavior, kept separate from the bookkeeping test: real
     ffmpeg cannot decode placeholder bytes, so extraction must surface a

@@ -223,7 +223,8 @@ them from an **optional** personal sample library, never from the repo. Point
 `FEEDPAKR_LOCAL_FIXTURES` at it; with no env var the historical
 `c:\Users\PC\Downloads\Alll` path is used if it exists. When it is absent the
 dependent tests self-skip with a reason naming the env var, while the portable
-suite (and everything else) still runs.
+suite (and everything else) still runs. A set-but-missing path warns and skips
+rather than silently falling back to the historical folder.
 
 `tests/test_pipeline.py` needs the host's `lib/` (for `guitarpro`, `gp2rs`,
 `gp2rs_gpx`, `song`) on `sys.path` — `tests/conftest.py` looks for a sibling
