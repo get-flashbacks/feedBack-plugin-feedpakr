@@ -265,14 +265,14 @@ re-selected.
 
 ## Versioning
 
-Bump `version` in `plugin.json` whenever a change is user-visible — new
-import capability, a fixed bug that affected real output, a changed UI
-flow (best-practices rule 4: bump on every release — the version is used
-for cache-busting the served JS/CSS URL, so an unbumped version means
-users keep getting stale cached files after an update). It was left at
-`0.1.0` from the very first commit through 9 subsequent commits (four
-full feature phases) before anyone noticed — don't let it go stale
-again. Patch (`0.1.x`) for fixes,
-minor (`0.x.0`) for new features, matching normal semver-during-0.x
-conventions. This is independent of `feedpak_version` (the *format*
-version) — don't conflate the two.
+Bump `version` in `plugin.json` for every functional source change (any
+`.py`/`.js`/`.html`/`.css` file or schema JSON), matching the CI
+`version-bumped-on-change` gate — docs, tests, fixtures, `.github/`, and
+a version-only bump are exempt. The version also cache-busts the served
+JS/CSS URL, so an unbumped version means users keep getting stale cached
+files after an update (it was left at `0.1.0` from the very first commit
+through 9 subsequent commits — four full feature phases — before anyone
+noticed, so don't let it go stale again). Patch (`0.x.y` with `0.x`
+series) for fixes, minor (`0.x.0`) for new features, matching normal
+semver-during-0.x conventions. This is independent of `feedpak_version`
+(the *format* version) — don't conflate the two.
