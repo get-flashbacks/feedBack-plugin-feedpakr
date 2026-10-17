@@ -203,20 +203,48 @@ exist — pip exits nonzero on a missing requirements file — so a plugin-only
 checkout installs `PyYAML` directly instead and still runs everything that
 doesn't need the host.
 
+`python -m pytest -ra` is the default (`pytest.ini` sets `addopts`), so the
+short test summary always lists every skip with its reason. The full skip
+inventory and the policy for what may skip in CI is in
+[`tests/SKIPS.md`](tests/SKIPS.md).
+
+### Portable conversion regressions
+
+The release-gating import tests run against fixtures **generated in-repo** by
+`tests/portable_fixtures.py` — a hand-authored GPIF (GP7/8) `.gp` and a real
+GP4 `.gp4` written with pyguitarpro. They need no song data, so they run on
+every CI run and cover sections, chord/template consistency, drums, and the
+GPIF-vs-GP3-5 format/tuning differences (`tests/test_portable_conversion.py`).
+
+### Optional local fixtures
+
+Tests that lock in behavior against real, copyrighted songs/sloppaks read
+them from an **optional** personal sample library, never from the repo. Point
+`FEEDPAKR_LOCAL_FIXTURES` at it; with no env var the historical
+`c:\Users\PC\Downloads\Alll` path is used if it exists. When it is absent the
+dependent tests self-skip with a reason naming the env var, while the portable
+suite (and everything else) still runs.
+
 `tests/test_pipeline.py` needs the host's `lib/` (for `guitarpro`, `gp2rs`,
 `gp2rs_gpx`, `song`) on `sys.path` — `tests/conftest.py` looks for a sibling
 `pakr/feedBack` checkout and self-skips those tests if it isn't found.
 
-Two tests need an external binary: `test_extract_pack_assets_separated_stems_builds_mixdown_with_valid_audio`
-runs a real `ffmpeg` amix, and `test_extract_pack_assets_separated_stems_corrupt_audio_errors`
-checks that a failed mixdown is surfaced as an error. Both are skipped when `ffmpeg`
-is not on `PATH`. Nothing installs it — `tests.yml` doesn't and the `ubuntu-latest`
-image doesn't ship it — so CI skips them, and a local green run is not evidence the
-mixdown path works. The bookkeeping test of the same name-shape
-(`test_extract_pack_assets_separated_stems_no_full_mix`) mocks the mixdown boundary
-and so runs everywhere.
+### Required capabilities in CI
 
-Notable regression tests, all against real sample files:
+`.github/workflows/tests.yml` checks out the host and installs `ffmpeg`, then
+sets `FEEDPAKR_REQUIRE=host,ffmpeg`. `tests/conftest.py::pytest_configure`
+**aborts the session** if any required capability is missing, so a broken
+provisioning step fails loudly instead of producing a green run full of skips.
+Locally (`FEEDPAKR_REQUIRE` unset) the same tests skip cleanly when the host lib
+or `ffmpeg` isn't installed.
+
+Two mixdown tests run a real `ffmpeg` amix
+(`test_extract_pack_assets_separated_stems_builds_mixdown_with_valid_audio`,
+`..._corrupt_audio_errors`); the same-name-shape bookkeeping test
+(`test_extract_pack_assets_separated_stems_no_full_mix`) mocks the mixdown
+boundary and so runs everywhere.
+
+Notable regression tests:
 
 - `test_build_feedpak_extracts_all_16_sections` — "Money (J).gp5" was documented as
   losing all 16 of its section markers through the legacy sloppak pipeline; must extract
@@ -230,6 +258,8 @@ Notable regression tests, all against real sample files:
   `test_build_feedpak_gpif_keys_track_gets_notation`,
   `test_build_feedpak_gpif_vocal_track_produces_vocal_pitch` — Phase 3 fidelity features,
   each checked against real converted output, not just unit-level logic.
+- `tests/test_portable_conversion.py` — the portable, always-on counterparts
+  of the real-tab section/chord checks plus GP4 drums-as-drum-tab.
 - `tests/test_upgrade.py::test_real_fixture_batch_all_fully_valid` — every sample
   `.sloppak` this project has upgrades to a fully spec-valid `.feedpak` (21/21).
 

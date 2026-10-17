@@ -1,18 +1,19 @@
-"""Regression tests against the 5 real '(J)' tabs in
-c:\\Users\\PC\\Downloads\\Alll\\tabs (Black, Bring Me To Life, Money, Rehab,
-So Far Away) — all GPIF (.gp) sources. These lock in the manual spot-checks
-done during development: sections come out ordered and named sanely, chord
-occurrences map consistently to their fret-pattern template, hand-shapes
-are derived from them, and the (currently absent, in these particular
-files) tone data is reported honestly rather than fabricated. Self-skips
-when the sample folder or host lib isn't present, same convention as
-test_pipeline.py.
+"""Regression tests against the 5 real '(J)' tabs in the optional personal
+sample library at ``<FEEDPAKR_LOCAL_FIXTURES>/tabs`` (default
+``c:\\Users\\PC\\Downloads\\Alll\\tabs``): Black, Bring Me To Life, Money,
+Rehab, So Far Away — all GPIF (.gp) sources. These lock in the manual
+spot-checks done during development: sections come out ordered and named
+sanely, chord occurrences map consistently to their fret-pattern template,
+hand-shapes are derived from them, and the (currently absent, in these
+particular files) tone data is reported honestly rather than fabricated.
+Self-skips when the sample folder or host lib isn't present, same
+convention as test_pipeline.py. The always-available portable equivalents
+live in test_portable_conversion.py.
 """
-from pathlib import Path
-
 import pytest
 
 import feedpakr_pipeline as pipeline
+from _support import LOCAL_FIXTURE_SKIP_REASON, local_fixtures_root
 
 HOST_AVAILABLE = (
     pipeline.guitarpro is not None
@@ -24,7 +25,7 @@ pytestmark = pytest.mark.skipif(
     not HOST_AVAILABLE, reason='feedBack host core lib not on sys.path'
 )
 
-TABS_DIR = Path(r'c:\Users\PC\Downloads\Alll\tabs')
+TABS_DIR = local_fixtures_root() / 'tabs'
 
 # name -> expected (min_section_count, first_section_name)
 CASES = {
@@ -34,12 +35,6 @@ CASES = {
     'Rehab (J).gp': (10, '1stverse'),
     'So Far Away (J).gp': (14, 'verse1'),
 }
-
-
-def _case_available(name):
-    return pytest.mark.skipif(
-        not (TABS_DIR / name).is_file(), reason=f'{name} not present on this machine',
-    )
 
 
 def _auto_selection(gp_path: str):
@@ -53,7 +48,7 @@ def _auto_selection(gp_path: str):
 def test_real_tab_sections_ordered_and_named(name):
     gp_path = TABS_DIR / name
     if not gp_path.is_file():
-        pytest.skip(f'{name} not present on this machine')
+        pytest.skip(f'{name}: {LOCAL_FIXTURE_SKIP_REASON}')
     min_count, first_name = CASES[name]
     track_indices, names = _auto_selection(str(gp_path))
 
@@ -100,7 +95,7 @@ def test_real_tab_chords_map_consistently_to_templates(name):
     chord-id/template drift."""
     gp_path = TABS_DIR / name
     if not gp_path.is_file():
-        pytest.skip(f'{name} not present on this machine')
+        pytest.skip(f'{name}: {LOCAL_FIXTURE_SKIP_REASON}')
     track_indices, names = _auto_selection(str(gp_path))
 
     result = pipeline.build_feedpak(
@@ -145,7 +140,7 @@ def test_black_authored_chord_names_reach_templates():
     name = 'Black (J).gp'
     gp_path = TABS_DIR / name
     if not gp_path.is_file():
-        pytest.skip(f'{name} not present on this machine')
+        pytest.skip(f'{name}: {LOCAL_FIXTURE_SKIP_REASON}')
     track_indices, names = _auto_selection(str(gp_path))
 
     result = pipeline.build_feedpak(
@@ -178,7 +173,7 @@ def test_real_tab_warns_about_same_string_chord_collisions(name):
         pytest.skip('not a known-affected fixture')
     gp_path = TABS_DIR / name
     if not gp_path.is_file():
-        pytest.skip(f'{name} not present on this machine')
+        pytest.skip(f'{name}: {LOCAL_FIXTURE_SKIP_REASON}')
     track_indices, names = _auto_selection(str(gp_path))
 
     result = pipeline.build_feedpak(
@@ -195,7 +190,7 @@ def test_real_tab_warns_about_same_string_chord_collisions(name):
 def test_real_tab_handshapes_derived_when_chords_present(name):
     gp_path = TABS_DIR / name
     if not gp_path.is_file():
-        pytest.skip(f'{name} not present on this machine')
+        pytest.skip(f'{name}: {LOCAL_FIXTURE_SKIP_REASON}')
     track_indices, names = _auto_selection(str(gp_path))
 
     result = pipeline.build_feedpak(
@@ -225,7 +220,7 @@ def test_real_tab_tones_present_via_sound_automation(name):
     data (at minimum, its base instrument declaration)."""
     gp_path = TABS_DIR / name
     if not gp_path.is_file():
-        pytest.skip(f'{name} not present on this machine')
+        pytest.skip(f'{name}: {LOCAL_FIXTURE_SKIP_REASON}')
     track_indices, names = _auto_selection(str(gp_path))
 
     result = pipeline.build_feedpak(
@@ -248,7 +243,7 @@ def test_bring_me_to_life_keys_track_captures_piano_to_strings_switch():
     name = 'Bring Me To Life (J).gp'
     gp_path = TABS_DIR / name
     if not gp_path.is_file():
-        pytest.skip(f'{name} not present on this machine')
+        pytest.skip(f'{name}: {LOCAL_FIXTURE_SKIP_REASON}')
     track_indices, names = _auto_selection(str(gp_path))
 
     result = pipeline.build_feedpak(
