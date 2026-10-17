@@ -27,10 +27,20 @@ everything else still runs.
 
 ### 2. FFmpeg missing — required in CI
 
-Reason: `ffmpeg not installed on this host (optional)` and the runtime
-`ffmpeg cannot generate a test tone: ...` guard.
+Reason: `ffmpeg not installed on this host (optional)` (the `skipif` gate on
+`test_upgrade.py`'s decode tests), `ffmpeg not installed on this host` and
+`ffmpeg cannot generate a test tone: ...` (the runtime guards inside
+`test_upgrade.py`'s tone/mixdown helpers), and `ffmpeg not available` (the
+reactive skip in `test_audio.py`).
 
 Files: `test_audio.py`, `test_upgrade.py`.
+
+`test_upgrade.py` gates its real decode/mixdown tests behind a
+`pytest.mark.skipif` on `ffmpeg_available()` and its helpers skip on a
+FileNotFoundError. `test_audio.py` has no `skipif` gate: its WAV→OGG test runs
+the transcode and only skips (`ffmpeg not available`) when the call returns an
+`ffmpeg not found` error, i.e. it skips reactively on a runtime failure rather
+than on a missing-binary check performed up front.
 
 These drive the real mixdown / transcode / auto-sync regressions, which are
 release-critical. CI installs the `ffmpeg` package (which also provides
@@ -61,7 +71,10 @@ to run in CI. The equivalent *behaviors* are covered portably — see
 
 Point `FEEDPAKR_LOCAL_FIXTURES` at a directory laid out like the historical
 default (`tabs/`, `export/`, the Money files at the root) to run the optional
-suite locally. With no env var, the historical path is used if it exists.
+suite locally. With no env var, the historical path is used if it exists. A
+set-but-missing path warns and the tests skip — it never falls back to the
+historical folder, so a typo can't silently run the suite against the wrong
+library.
 
 ### 4. Optional Python dependencies
 

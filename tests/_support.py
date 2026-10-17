@@ -13,14 +13,16 @@ Two kinds of configuration live here:
   so a missing capability fails the run loudly instead of letting the
   essential regressions skip silently. ``tests/conftest.py`` enforces this.
 
-Kept import-light (``os``/``shutil``/``pathlib`` only) so `conftest.py` and
-individual test modules can import it without pulling in the host lib.
+Kept import-light (``os``/``shutil``/``warnings``/``pathlib`` only) so
+`conftest.py` and individual test modules can import it without pulling in the
+host lib.
 """
 
 from __future__ import annotations
 
 import os
 import shutil
+import warnings
 from pathlib import Path
 
 #: Env var pointing at the optional personal sample library.
@@ -40,39 +42,27 @@ LOCAL_FIXTURE_SKIP_REASON = (
 )
 
 
-def local_fixtures_dir() -> Path | None:
-    """Resolve the optional sample-library root, or ``None`` if absent.
+def local_fixtures_root() -> Path:
+    """Resolve the optional sample-library root.
 
     ``FEEDPAKR_LOCAL_FIXTURES`` wins when set; otherwise the historical
-    default is used if it happens to exist. A configured-but-missing path
-    resolves to ``None`` (the dependent tests skip with a reason that names
-    the env var, rather than erroring on a bad path).
+    default is used (whether or not it exists, so callers' ``path.is_file()``
+    guards skip without a ``None`` check). A configured-but-missing path warns
+    and is returned as-is rather than falling back to the historical default,
+    so a typo'd env var cannot silently run the optional suite against the
+    wrong library.
     """
     raw = os.environ.get(LOCAL_FIXTURES_ENV)
-    if raw:
-        candidate = Path(raw)
-        return candidate if candidate.is_dir() else None
-    if DEFAULT_LOCAL_FIXTURES.is_dir():
+    if not raw:
         return DEFAULT_LOCAL_FIXTURES
-    return None
-
-
-def local_fixtures_root() -> Path:
-    """Like :func:`local_fixtures_dir`, but always returns a ``Path``.
-
-    Falls back to :data:`DEFAULT_LOCAL_FIXTURES` when nothing is configured,
-    so callers can keep using ``path.is_file()`` guards without a ``None``
-    check (the path simply won't exist).
-    """
-    return local_fixtures_dir() or DEFAULT_LOCAL_FIXTURES
-
-
-def local_fixture(*parts: str) -> Path | None:
-    """Return ``local_fixtures_dir()/parts`` when the root exists, else ``None``."""
-    root = local_fixtures_dir()
-    if root is None:
-        return None
-    return root.joinpath(*parts)
+    candidate = Path(raw)
+    if not candidate.is_dir():
+        warnings.warn(
+            f'{LOCAL_FIXTURES_ENV}={raw!r} is not a directory; '
+            'optional sample-library tests will skip',
+            stacklevel=2,
+        )
+    return candidate
 
 
 def ffmpeg_available() -> bool:

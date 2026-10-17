@@ -9,6 +9,7 @@
 #
 # External binaries are not pip-installable and so cannot be declared here:
 # tests/test_upgrade.py's separated-stems mixdown integration/error tests need
-# `ffmpeg` on PATH and self-skip without it, so CI (runner image ships no
-# ffmpeg) skips them; the bookkeeping test runs everywhere.
+# `ffmpeg` on PATH. CI installs it and sets FEEDPAKR_REQUIRE=ffmpeg, so those
+# tests run there (or abort the session if provisioning breaks); locally they
+# self-skip without it, while the bookkeeping test runs everywhere.
 pytest>=9.1,<10

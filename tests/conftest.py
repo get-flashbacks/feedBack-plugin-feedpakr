@@ -1,4 +1,3 @@
-import shutil
 import sys
 import importlib
 from pathlib import Path
@@ -45,7 +44,7 @@ def pytest_configure(config):
     missing = []
     if 'host' in required and not HOST_AVAILABLE:
         missing.append('host core lib (guitarpro/gp2rs/gp2rs_gpx) not importable')
-    if 'ffmpeg' in required and shutil.which('ffmpeg') is None:
+    if 'ffmpeg' in required and not _support.ffmpeg_available():
         missing.append('ffmpeg not on PATH')
     if missing:
         pytest.exit(
